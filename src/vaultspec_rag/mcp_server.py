@@ -46,6 +46,20 @@ _start_time: float = 0.0
 _http_mode: bool = False  # set once in main() before event loop starts
 
 
+def _resolve_log_path() -> Path:
+    """Resolve the daemon's rotating log path.
+
+    Mirrors the parent CLI's ``_log_file()`` resolution so the
+    daemon writes to the same file the parent created on spawn.
+    """
+    from .config import get_config
+
+    cfg = get_config()
+    status_dir = Path(cfg.status_dir).expanduser()
+    status_dir.mkdir(parents=True, exist_ok=True)
+    return status_dir / cfg.log_file
+
+
 def _registry_full_error_dict(exc: RegistryFullError) -> dict[str, Any]:
     """Build the ADR D4 structured error dict for registry-full errors."""
     return {
@@ -1025,6 +1039,30 @@ def main(port: int | None = None) -> None:
         import uvicorn
         from starlette.applications import Starlette
         from starlette.routing import Mount, Route
+
+        from .config import get_config
+        from .logging_config import (
+            configure_logging,
+            install_daemon_log_rotation,
+        )
+
+        # ADR D1 install ordering (CRITICAL):
+        # argparse → configure_logging → install_daemon_log_rotation → uvicorn.run.
+        # The spawned daemon inherits the parent's stdout/stderr FD
+        # redirection onto service.log via Popen, but its own
+        # logging handlers are empty.  Core's configure_logging
+        # installs a stderr RichHandler, and install_daemon_log_rotation
+        # then layers the rotating file handler on top and re-dup2s
+        # fds 1/2 onto the rotating stream.  Rotation is a stdio-mode
+        # asymmetry on purpose: stdio is one-shot CLI tooling, not a
+        # long-lived daemon, so no rotation is needed there.
+        configure_logging()
+        cfg = get_config()
+        install_daemon_log_rotation(
+            _resolve_log_path(),
+            max_bytes=int(cfg.service_log_max_bytes),
+            backup_count=int(cfg.service_log_backup_count),
+        )
 
         # Override the default streamable_http_path so the inner
         # Starlette app serves at "/" instead of "/mcp".  Combined
