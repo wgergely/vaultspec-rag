@@ -25,7 +25,7 @@ from anyio.to_thread import run_sync as _run_in_thread
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
-from .service import ServiceRegistry
+from .registry import get_registry
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 mcp = FastMCP("VaultSpec Search", stateless_http=True)
 
-_registry = ServiceRegistry()
+_registry = get_registry()
 _watcher_tasks: dict[Path, asyncio.Task[None]] = {}
 _watcher_stops: dict[Path, asyncio.Event] = {}
 _watcher_lock = threading.Lock()
