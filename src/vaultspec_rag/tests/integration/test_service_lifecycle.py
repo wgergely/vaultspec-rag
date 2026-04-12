@@ -59,7 +59,7 @@ def test_start_health_stop(request: pytest.FixtureRequest, tmp_path: Path) -> No
         assert "cuda" in health
         assert "models_loaded" in health
         assert "uptime_s" in health
-        assert "projects" in health
+        assert "project_count" in health
         assert health["status"] == "ready"
 
         _terminate_pid(pid)
