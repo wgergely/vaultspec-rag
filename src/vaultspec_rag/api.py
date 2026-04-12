@@ -12,12 +12,14 @@ import logging
 from typing import TYPE_CHECKING
 
 from .graph_cache import GraphCache
+from .progress import NullProgressReporter
 from .registry import get_registry
 
 if TYPE_CHECKING:
     import pathlib
 
     from .indexer import IndexResult
+    from .progress import ProgressReporter
     from .search import SearchResult
 
 logger = logging.getLogger(__name__)
@@ -39,7 +41,12 @@ def _resolve(root_dir: pathlib.Path) -> pathlib.Path:
     return Path(root_dir).resolve()
 
 
-def index(root_dir: pathlib.Path, *, full: bool = False) -> IndexResult:
+def index(
+    root_dir: pathlib.Path,
+    *,
+    full: bool = False,
+    reporter: ProgressReporter | None = None,
+) -> IndexResult:
     """Index vault documents, returning an :class:`IndexResult`.
 
     Invalidates the cached :class:`VaultGraph` after indexing so that
@@ -49,17 +56,21 @@ def index(root_dir: pathlib.Path, *, full: bool = False) -> IndexResult:
         root_dir: Workspace root directory.
         full: If ``True``, perform a full re-index (drops and
             recreates the collection); otherwise incremental.
+        reporter: Optional progress reporter. A ``NullProgressReporter``
+            is used when omitted so library consumers can call this
+            facade without any UI.
 
     Returns:
         An ``IndexResult`` with counts of added, updated, and
         removed documents.
     """
     root = _resolve(root_dir)
+    rep = reporter if reporter is not None else NullProgressReporter()
     with get_registry().lease(root) as slot:
         result = (
-            slot.vault_indexer.full_index()
+            slot.vault_indexer.full_index(reporter=rep)
             if full
-            else slot.vault_indexer.incremental_index()
+            else slot.vault_indexer.incremental_index(reporter=rep)
         )
         slot.graph_cache.invalidate()
         return result
@@ -69,6 +80,7 @@ def index_codebase(
     root_dir: pathlib.Path,
     *,
     full: bool = False,
+    reporter: ProgressReporter | None = None,
 ) -> IndexResult:
     """Index codebase source files, returning an :class:`IndexResult`.
 
@@ -80,16 +92,18 @@ def index_codebase(
         full: If ``True``, perform a full re-index (drops and
             recreates the codebase collection); otherwise
             incremental.
+        reporter: Optional progress reporter.
 
     Returns:
         An ``IndexResult`` with counts of added, updated, and
         removed code chunks.
     """
     root = _resolve(root_dir)
+    rep = reporter if reporter is not None else NullProgressReporter()
     with get_registry().lease(root) as slot:
         if full:
-            return slot.code_indexer.full_index()
-        return slot.code_indexer.incremental_index()
+            return slot.code_indexer.full_index(reporter=rep)
+        return slot.code_indexer.incremental_index(reporter=rep)
 
 
 def search_vault(
