@@ -46,12 +46,14 @@ class TestToolRegistration:
             "get_code_file",
             "reindex_vault",
             "reindex_codebase",
+            "list_projects",
+            "evict_project",
         }
         assert expected == tool_names
 
     def test_tool_count(self):
         tools = _run(mcp.list_tools())
-        assert len(tools) == 6
+        assert len(tools) == 8
 
     def test_all_tools_have_descriptions(self):
         tools = _run(mcp.list_tools())
@@ -723,6 +725,39 @@ class TestMultiProjectWatcher:
         from vaultspec_rag.mcp_server import _stop_watcher
 
         _stop_watcher(tmp_path)  # must not raise
+
+
+class TestAdminTools:
+    """list_projects and evict_project MCP admin tools."""
+
+    def test_list_projects_empty_registry(self) -> None:
+        """With no slots, returns empty projects and config-matched caps."""
+        from vaultspec_rag.config import get_config
+        from vaultspec_rag.mcp_server import _registry, list_projects
+
+        # Force an empty registry.
+        with _registry._lock:
+            roots = list(_registry._projects.keys())
+        for r in roots:
+            _registry.close_project(r)
+
+        result = _run(list_projects())
+        assert result["projects"] == []
+        cfg = get_config()
+        assert result["max_projects"] == cfg.service_max_projects
+        assert result["idle_ttl_seconds"] == float(cfg.service_idle_ttl_seconds)
+
+    def test_evict_project_unknown_returns_not_found(self, tmp_path) -> None:
+        from vaultspec_rag.mcp_server import evict_project
+
+        result = _run(evict_project(str(tmp_path / "never-seen")))
+        assert result == {"evicted": False, "reason": "not_found"}
+
+    def test_list_projects_help_tool_registered(self) -> None:
+        tools = _run(mcp.list_tools())
+        names = {t.name for t in tools}
+        assert "list_projects" in names
+        assert "evict_project" in names
 
 
 class TestRegistryFullErrorShape:

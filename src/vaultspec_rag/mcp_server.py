@@ -846,6 +846,89 @@ async def reindex_codebase(
     return result
 
 
+# -- Admin tools -------------------------------------------------------------
+
+
+@mcp.tool()
+async def list_projects(
+    project_root: str | None = None,
+) -> dict[str, Any]:
+    """Return a snapshot of every active :class:`ProjectSlot`.
+
+    Args:
+        project_root: Accepted for signature parity with other admin
+            tools (``get_index_status``, ``reindex_*``).  Ignored —
+            the list is registry-wide.
+
+    Returns:
+        Dict with keys ``projects`` (list), ``max_projects`` (int),
+        and ``idle_ttl_seconds`` (float).  Each project entry has
+        ``root``, ``last_access_iso`` (ISO-8601 local timestamp
+        derived from the monotonic ``idle_seconds``),
+        ``idle_seconds``, and ``ref_count``.
+    """
+    del project_root  # signature parity only
+
+    def _run() -> dict[str, Any]:
+        from datetime import datetime
+
+        snapshot = _registry.snapshot()
+        wall_now = datetime.now().astimezone()
+        projects = []
+        for entry in snapshot:
+            idle_s = float(entry["idle_seconds"])
+            last_access_wall = wall_now.timestamp() - idle_s
+            last_access_iso = (
+                datetime.fromtimestamp(last_access_wall).astimezone().isoformat()
+            )
+            projects.append(
+                {
+                    "root": str(entry["root"]),
+                    "last_access_iso": last_access_iso,
+                    "idle_seconds": idle_s,
+                    "ref_count": int(entry["ref_count"]),
+                },
+            )
+        return {
+            "projects": projects,
+            "max_projects": _registry.max_projects,
+            "idle_ttl_seconds": _registry.idle_ttl_seconds,
+        }
+
+    return await _run_in_thread(_run)
+
+
+@mcp.tool()
+async def evict_project(root: str) -> dict[str, Any]:
+    """Force-evict the :class:`ProjectSlot` for *root*.
+
+    Args:
+        root: Workspace root directory (resolved internally).
+
+    Returns:
+        One of:
+
+        - ``{"evicted": True,  "reason": "forced"}`` — slot removed.
+        - ``{"evicted": False, "reason": "busy"}`` — slot had live
+          leases; operator should retry.
+        - ``{"evicted": False, "reason": "not_found"}`` — unknown
+          root.
+    """
+    target = Path(root).resolve()
+
+    def _run() -> dict[str, Any]:
+        with _registry._lock:
+            slot = _registry._projects.get(target)
+            if slot is None:
+                return {"evicted": False, "reason": "not_found"}
+            if slot.ref_count > 0:
+                return {"evicted": False, "reason": "busy"}
+        _registry.close_project(target)
+        return {"evicted": True, "reason": "forced"}
+
+    return await _run_in_thread(_run)
+
+
 # -- Resources ---------------------------------------------------------------
 
 
