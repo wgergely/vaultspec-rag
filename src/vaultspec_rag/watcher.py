@@ -18,7 +18,7 @@ from watchfiles import Change, awatch
 if TYPE_CHECKING:
     import asyncio
 
-    from .api import GraphCache
+    from .graph_cache import GraphCache
     from .indexer import CodebaseIndexer, VaultIndexer
     from .search import VaultSearcher
 

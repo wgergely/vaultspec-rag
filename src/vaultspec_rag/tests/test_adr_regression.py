@@ -125,7 +125,7 @@ class TestGraphCache:
     """ADR: GraphCache returns same instance on repeated calls."""
 
     def test_graph_cache_invalidate_clears(self):
-        from vaultspec_rag.api import GraphCache
+        from vaultspec_rag.graph_cache import GraphCache
 
         cache = GraphCache(ttl_seconds=300.0)
         # After invalidate, internal state is cleared
@@ -137,7 +137,7 @@ class TestGraphCache:
     def test_graph_cache_has_lock(self):
         import threading
 
-        from vaultspec_rag.api import GraphCache
+        from vaultspec_rag.graph_cache import GraphCache
 
         cache = GraphCache(ttl_seconds=300.0)
         assert isinstance(cache._lock, type(threading.Lock()))

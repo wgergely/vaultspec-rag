@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from .search import VaultSearcher
     from .store import VaultStore
 
-from .api import GraphCache
+from .graph_cache import GraphCache
 
 logger = logging.getLogger(__name__)
 
