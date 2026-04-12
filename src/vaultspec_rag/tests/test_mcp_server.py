@@ -723,3 +723,37 @@ class TestMultiProjectWatcher:
         from vaultspec_rag.mcp_server import _stop_watcher
 
         _stop_watcher(tmp_path)  # must not raise
+
+
+class TestRegistryFullErrorShape:
+    """MCP tool handlers translate RegistryFullError into a structured dict."""
+
+    def test_error_dict_shape(self, tmp_path) -> None:
+        """_registry_full_error_dict contains every ADR D4 key."""
+        from vaultspec_rag.mcp_server import (
+            _registry,
+            _registry_full_error_dict,
+        )
+        from vaultspec_rag.service import RegistryFullError
+
+        exc = RegistryFullError(_registry.max_projects)
+        result = _registry_full_error_dict(exc)
+        assert result["ok"] is False
+        assert result["error"] == "registry_full"
+        assert result["max_projects"] == _registry.max_projects
+        assert isinstance(result["busy_projects"], list)
+        assert result["message"]  # non-empty message
+
+    def test_ensure_watcher_uses_peek_project(self, tmp_path) -> None:
+        """_ensure_watcher must not bump ref_count on the slot.
+
+        Reads the module source directly so the assertion is robust to
+        whether the watcher task is running.
+        """
+        import inspect
+
+        from vaultspec_rag import mcp_server
+
+        source = inspect.getsource(mcp_server._ensure_watcher)
+        assert "_registry.peek_project" in source
+        assert "_registry.get_project" not in source

@@ -19,13 +19,14 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from anyio.to_thread import run_sync as _run_in_thread
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
 from .registry import get_registry
+from .service import RegistryFullError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -43,6 +44,17 @@ _watcher_stops: dict[Path, asyncio.Event] = {}
 _watcher_lock = threading.Lock()
 _start_time: float = 0.0
 _http_mode: bool = False  # set once in main() before event loop starts
+
+
+def _registry_full_error_dict(exc: RegistryFullError) -> dict[str, Any]:
+    """Build the ADR D4 structured error dict for registry-full errors."""
+    return {
+        "ok": False,
+        "error": "registry_full",
+        "message": str(exc),
+        "max_projects": _registry.max_projects,
+        "busy_projects": [str(p) for p in _registry.busy_roots()],
+    }
 
 
 def _validate_vault_root(root: Path) -> Path:
@@ -206,10 +218,10 @@ def _ensure_watcher(root: Path) -> None:
     root = root.resolve()
     if root in _watcher_tasks:
         return
-    # Resolve the project slot OUTSIDE the lock — get_project() has
+    # Resolve the project slot OUTSIDE the lock — peek_project() has
     # its own per-root locking and can take 50-200ms on cold start.
     # Holding _watcher_lock during that would block the event loop.
-    slot = _registry.get_project(root)
+    slot = _registry.peek_project(root)
     with _watcher_lock:
         if root in _watcher_tasks:
             return
@@ -525,7 +537,7 @@ async def search_vault(
     query: str,
     top_k: int = 5,
     project_root: str | None = None,
-) -> SearchResponse:
+) -> SearchResponse | dict[str, Any]:
     """Search the documentation vault for relevant ADRs, plans, and research.
 
     Args:
@@ -548,20 +560,25 @@ async def search_vault(
     query = _validate_query(query)
     root = _resolve_root(project_root)
 
-    def _run() -> SearchResponse:
-        slot = _registry.get_project(root)
-        logger.info("Searching vault for: %s", query)
-        results = slot.searcher.search_vault(query, top_k=top_k)
-        items = [
-            SearchResultItem.model_validate(r, from_attributes=True) for r in results
-        ]
-        return SearchResponse(
-            results=items,
-            summary=f"Found {len(results)} relevant documents in the vault.",
-        )
+    def _run() -> SearchResponse | dict[str, Any]:
+        try:
+            with _registry.lease(root) as slot:
+                logger.info("Searching vault for: %s", query)
+                results = slot.searcher.search_vault(query, top_k=top_k)
+                items = [
+                    SearchResultItem.model_validate(r, from_attributes=True)
+                    for r in results
+                ]
+                return SearchResponse(
+                    results=items,
+                    summary=f"Found {len(results)} relevant documents in the vault.",
+                )
+        except RegistryFullError as exc:
+            return _registry_full_error_dict(exc)
 
     result = await _run_in_thread(_run)
-    _ensure_watcher(root)
+    if isinstance(result, SearchResponse):
+        _ensure_watcher(root)
     return result
 
 
@@ -574,7 +591,7 @@ async def search_codebase(
     function_name: str | None = None,
     class_name: str | None = None,
     project_root: str | None = None,
-) -> SearchResponse:
+) -> SearchResponse | dict[str, Any]:
     """Search the source codebase for relevant functions, classes, or logic.
 
     Args:
@@ -602,34 +619,43 @@ async def search_codebase(
     query = _validate_query(query)
     root = _resolve_root(project_root)
 
-    def _run() -> SearchResponse:
-        slot = _registry.get_project(root)
-        logger.info("Searching codebase for: %s (lang=%s)", query, language)
-        results = slot.searcher.search_codebase(
-            query,
-            top_k=top_k,
-            language=language,
-            node_type=node_type,
-            function_name=function_name,
-            class_name=class_name,
-        )
-        items = [
-            SearchResultItem.model_validate(r, from_attributes=True) for r in results
-        ]
-        return SearchResponse(
-            results=items,
-            summary=f"Found {len(results)} relevant code blocks.",
-        )
+    def _run() -> SearchResponse | dict[str, Any]:
+        try:
+            with _registry.lease(root) as slot:
+                logger.info(
+                    "Searching codebase for: %s (lang=%s)",
+                    query,
+                    language,
+                )
+                results = slot.searcher.search_codebase(
+                    query,
+                    top_k=top_k,
+                    language=language,
+                    node_type=node_type,
+                    function_name=function_name,
+                    class_name=class_name,
+                )
+                items = [
+                    SearchResultItem.model_validate(r, from_attributes=True)
+                    for r in results
+                ]
+                return SearchResponse(
+                    results=items,
+                    summary=f"Found {len(results)} relevant code blocks.",
+                )
+        except RegistryFullError as exc:
+            return _registry_full_error_dict(exc)
 
     result = await _run_in_thread(_run)
-    _ensure_watcher(root)
+    if isinstance(result, SearchResponse):
+        _ensure_watcher(root)
     return result
 
 
 @mcp.tool()
 async def get_index_status(
     project_root: str | None = None,
-) -> IndexStatus:
+) -> IndexStatus | dict[str, Any]:
     """Return the current status of the RAG index and GPU hardware.
 
     Args:
@@ -647,25 +673,28 @@ async def get_index_status(
     """
     root = _resolve_root(project_root)
 
-    def _run() -> IndexStatus:
-        slot = _registry.get_project(root)
+    def _run() -> IndexStatus | dict[str, Any]:
         try:
-            import torch
+            with _registry.lease(root) as slot:
+                try:
+                    import torch
 
-            vram_gb = (
-                torch.cuda.get_device_properties(0).total_memory / 1e9
-                if torch.cuda.is_available()
-                else 0.0
-            )
-        except ImportError:
-            vram_gb = 0.0
-        return IndexStatus(
-            vault_count=slot.store.count(),
-            code_count=slot.store.count_code(),
-            storage_path=str(slot.store.db_path),
-            target_dir=str(root),
-            vram_gb=round(vram_gb, 2),
-        )
+                    vram_gb = (
+                        torch.cuda.get_device_properties(0).total_memory / 1e9
+                        if torch.cuda.is_available()
+                        else 0.0
+                    )
+                except ImportError:
+                    vram_gb = 0.0
+                return IndexStatus(
+                    vault_count=slot.store.count(),
+                    code_count=slot.store.count_code(),
+                    storage_path=str(slot.store.db_path),
+                    target_dir=str(root),
+                    vram_gb=round(vram_gb, 2),
+                )
+        except RegistryFullError as exc:
+            return _registry_full_error_dict(exc)
 
     return await _run_in_thread(_run)
 
@@ -717,7 +746,7 @@ async def get_code_file(
 async def reindex_vault(
     clean: bool = False,
     project_root: str | None = None,
-) -> IndexResponse:
+) -> IndexResponse | dict[str, Any]:
     """Re-index vault documentation (incremental by default).
 
     Invalidates the VaultGraph cache after indexing so the next
@@ -740,26 +769,30 @@ async def reindex_vault(
     """
     root = _resolve_root(project_root)
 
-    def _run() -> IndexResponse:
-        slot = _registry.get_project(root)
-        mode = "full" if clean else "incremental"
-        logger.info("Starting %s vault re-index...", mode)
-        if clean:
-            result = slot.vault_indexer.full_index(clean=True)
-        else:
-            result = slot.vault_indexer.incremental_index()
-        slot.graph_cache.invalidate()
-        return IndexResponse(
-            total=result.total,
-            added=result.added,
-            updated=result.updated,
-            removed=result.removed,
-            duration_ms=result.duration_ms,
-            files=result.files,
-        )
+    def _run() -> IndexResponse | dict[str, Any]:
+        try:
+            with _registry.lease(root) as slot:
+                mode = "full" if clean else "incremental"
+                logger.info("Starting %s vault re-index...", mode)
+                if clean:
+                    result = slot.vault_indexer.full_index(clean=True)
+                else:
+                    result = slot.vault_indexer.incremental_index()
+                slot.graph_cache.invalidate()
+                return IndexResponse(
+                    total=result.total,
+                    added=result.added,
+                    updated=result.updated,
+                    removed=result.removed,
+                    duration_ms=result.duration_ms,
+                    files=result.files,
+                )
+        except RegistryFullError as exc:
+            return _registry_full_error_dict(exc)
 
     result = await _run_in_thread(_run)
-    _ensure_watcher(root)
+    if isinstance(result, IndexResponse):
+        _ensure_watcher(root)
     return result
 
 
@@ -767,7 +800,7 @@ async def reindex_vault(
 async def reindex_codebase(
     clean: bool = False,
     project_root: str | None = None,
-) -> IndexResponse:
+) -> IndexResponse | dict[str, Any]:
     """Re-index the source codebase (incremental by default).
 
     Args:
@@ -787,25 +820,29 @@ async def reindex_codebase(
     """
     root = _resolve_root(project_root)
 
-    def _run() -> IndexResponse:
-        slot = _registry.get_project(root)
-        mode = "full" if clean else "incremental"
-        logger.info("Starting %s codebase re-index...", mode)
-        if clean:
-            result = slot.code_indexer.full_index(clean=True)
-        else:
-            result = slot.code_indexer.incremental_index()
-        return IndexResponse(
-            total=result.total,
-            added=result.added,
-            updated=result.updated,
-            removed=result.removed,
-            duration_ms=result.duration_ms,
-            files=result.files,
-        )
+    def _run() -> IndexResponse | dict[str, Any]:
+        try:
+            with _registry.lease(root) as slot:
+                mode = "full" if clean else "incremental"
+                logger.info("Starting %s codebase re-index...", mode)
+                if clean:
+                    result = slot.code_indexer.full_index(clean=True)
+                else:
+                    result = slot.code_indexer.incremental_index()
+                return IndexResponse(
+                    total=result.total,
+                    added=result.added,
+                    updated=result.updated,
+                    removed=result.removed,
+                    duration_ms=result.duration_ms,
+                    files=result.files,
+                )
+        except RegistryFullError as exc:
+            return _registry_full_error_dict(exc)
 
     result = await _run_in_thread(_run)
-    _ensure_watcher(root)
+    if isinstance(result, IndexResponse):
+        _ensure_watcher(root)
     return result
 
 
@@ -837,11 +874,11 @@ async def get_vault_document(doc_id: str) -> str:
     root = _default_root()
 
     def _run() -> str:
-        slot = _registry.get_project(root)
-        doc = slot.store.get_by_id(doc_id)
-        if not doc:
-            raise FileNotFoundError(f"Document '{doc_id}' not found")
-        return doc.get("content", "")
+        with _registry.lease(root) as slot:
+            doc = slot.store.get_by_id(doc_id)
+            if not doc:
+                raise FileNotFoundError(f"Document '{doc_id}' not found")
+            return doc.get("content", "")
 
     return await _run_in_thread(_run)
 
@@ -932,7 +969,7 @@ def main(port: int | None = None) -> None:
     else:
         # Eager model load for stdio — matches HTTP mode's service_lifespan.
         # Without this, the first tool call hits "EmbeddingModel not loaded"
-        # because ServiceRegistry.get_project() requires a loaded model.
+        # because ServiceRegistry.lease()/peek_project() require a loaded model.
         _registry.load_model()
         _registry._on_close_project = _stop_watcher
         try:

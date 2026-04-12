@@ -83,7 +83,7 @@ class TestGetProject:
         tmp_path: Path,
     ) -> None:
         root = _make_vault_dir(tmp_path)
-        slot = registry.get_project(root)
+        slot = registry.peek_project(root)
         try:
             assert slot.store is not None
             assert slot.searcher is not None
@@ -99,8 +99,8 @@ class TestGetProject:
         tmp_path: Path,
     ) -> None:
         root = _make_vault_dir(tmp_path)
-        s1 = registry.get_project(root)
-        s2 = registry.get_project(root)
+        s1 = registry.peek_project(root)
+        s2 = registry.peek_project(root)
         try:
             assert s1 is s2
         finally:
@@ -112,7 +112,7 @@ class TestGetProject:
         tmp_path: Path,
     ) -> None:
         root = _make_vault_dir(tmp_path)
-        slot = registry.get_project(root)
+        slot = registry.peek_project(root)
         try:
             assert slot.searcher.model is registry.model
         finally:
@@ -131,8 +131,8 @@ class TestMultiProject:
     ) -> None:
         root_a = _make_vault_dir(tmp_path / "project_a")
         root_b = _make_vault_dir(tmp_path / "project_b")
-        slot_a = registry.get_project(root_a)
-        slot_b = registry.get_project(root_b)
+        slot_a = registry.peek_project(root_a)
+        slot_b = registry.peek_project(root_b)
         try:
             # Same EmbeddingModel instance
             assert slot_a.searcher.model is slot_b.searcher.model
@@ -156,7 +156,7 @@ class TestCloseProject:
         tmp_path: Path,
     ) -> None:
         root = _make_vault_dir(tmp_path)
-        registry.get_project(root)
+        registry.peek_project(root)
         resolved = root.resolve()
         assert resolved in registry._projects
         registry.close_project(root)
@@ -168,7 +168,7 @@ class TestCloseProject:
         tmp_path: Path,
     ) -> None:
         root = _make_vault_dir(tmp_path)
-        slot = registry.get_project(root)
+        slot = registry.peek_project(root)
         store = slot.store
         registry.close_project(root)
         assert store._client is None
@@ -195,7 +195,7 @@ class TestCloseAll:
         reg = ServiceRegistry()
         reg._model = embedding_model
         root = _make_vault_dir(tmp_path)
-        slot = reg.get_project(root)
+        slot = reg.peek_project(root)
         store = slot.store
 
         reg.close_all()
@@ -223,7 +223,7 @@ class TestHealth:
         tmp_path: Path,
     ) -> None:
         root = _make_vault_dir(tmp_path)
-        registry.get_project(root)
+        registry.peek_project(root)
         try:
             h = registry.health()
             assert h["model_loaded"] is True
@@ -249,7 +249,7 @@ class TestConcurrency:
 
         def worker() -> None:
             barrier.wait()
-            slot = registry.get_project(root)
+            slot = registry.peek_project(root)
             results.append(slot)
 
         threads = [threading.Thread(target=worker) for _ in range(4)]
@@ -345,8 +345,8 @@ class TestMultiProjectSearch:
             },
         )
 
-        slot_a = registry.get_project(root_a)
-        slot_b = registry.get_project(root_b)
+        slot_a = registry.peek_project(root_a)
+        slot_b = registry.peek_project(root_b)
 
         # Index both (real GPU encoding — no mocks)
         slot_a.vault_indexer.full_index()
@@ -506,8 +506,8 @@ class TestSharedReranker:
     ) -> None:
         root_a = _make_vault_dir(tmp_path / "proj_a")
         root_b = _make_vault_dir(tmp_path / "proj_b")
-        slot_a = registry.get_project(root_a)
-        slot_b = registry.get_project(root_b)
+        slot_a = registry.peek_project(root_a)
+        slot_b = registry.peek_project(root_b)
         try:
             # Both searchers share the same CrossEncoder instance
             assert slot_a.searcher._reranker is slot_b.searcher._reranker
@@ -545,7 +545,7 @@ class TestSharedReranker:
         reg = ServiceRegistry()
         reg._model = embedding_model
         root = _make_vault_dir(tmp_path)
-        reg.get_project(root)
+        reg.peek_project(root)
         reranker = reg.get_reranker()
         assert reranker is not None
 
@@ -570,7 +570,7 @@ class TestGpuLock:
         tmp_path: Path,
     ) -> None:
         root = _make_vault_dir(tmp_path)
-        slot = registry.get_project(root)
+        slot = registry.peek_project(root)
         try:
             assert slot.searcher._gpu_lock is registry.gpu_lock
         finally:
@@ -583,8 +583,8 @@ class TestGpuLock:
     ) -> None:
         root_a = _make_vault_dir(tmp_path / "proj_a")
         root_b = _make_vault_dir(tmp_path / "proj_b")
-        slot_a = registry.get_project(root_a)
-        slot_b = registry.get_project(root_b)
+        slot_a = registry.peek_project(root_a)
+        slot_b = registry.peek_project(root_b)
         try:
             assert slot_a.searcher._gpu_lock is slot_b.searcher._gpu_lock
         finally:
@@ -609,7 +609,7 @@ class TestPerRootLocks:
 
         def worker(root: Path, key: str) -> None:
             barrier.wait()
-            results[key] = registry.get_project(root)
+            results[key] = registry.peek_project(root)
 
         t1 = threading.Thread(target=worker, args=(root_a, "a"))
         t2 = threading.Thread(target=worker, args=(root_b, "b"))
@@ -632,7 +632,7 @@ class TestPerRootLocks:
         tmp_path: Path,
     ) -> None:
         root = _make_vault_dir(tmp_path)
-        registry.get_project(root)
+        registry.peek_project(root)
         resolved = root.resolve()
         assert resolved in registry._root_locks
         registry.close_project(root)
@@ -646,7 +646,7 @@ class TestPerRootLocks:
         reg = ServiceRegistry()
         reg._model = embedding_model
         root = _make_vault_dir(tmp_path)
-        reg.get_project(root)
+        reg.peek_project(root)
         assert len(reg._root_locks) > 0
         reg.close_all()
         assert len(reg._root_locks) == 0

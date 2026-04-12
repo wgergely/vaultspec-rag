@@ -251,10 +251,6 @@ class ServiceRegistry:
                 self._projects[root] = slot
         return slot
 
-    # Temporary alias: removed at the end of step 6 once all MCP
-    # handlers are migrated to the lease API.
-    get_project = peek_project
-
     # -- lease API ---------------------------------------------------------
 
     @contextlib.contextmanager
