@@ -940,14 +940,8 @@ async def evict_project(root: str) -> dict[str, Any]:
     target = Path(root).resolve()
 
     def _run() -> dict[str, Any]:
-        with _registry._lock:
-            slot = _registry._projects.get(target)
-            if slot is None:
-                return {"evicted": False, "reason": "not_found"}
-            if slot.ref_count > 0:
-                return {"evicted": False, "reason": "busy"}
-        _registry.close_project(target)
-        return {"evicted": True, "reason": "forced"}
+        evicted, reason = _registry.try_evict(target)
+        return {"evicted": evicted, "reason": reason}
 
     return await _run_in_thread(_run)
 

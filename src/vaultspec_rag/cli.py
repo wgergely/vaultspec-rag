@@ -670,6 +670,19 @@ def _try_mcp_admin(
         return None
 
     import asyncio
+    import errno
+
+    refused_errnos = {
+        errno.ECONNREFUSED,
+        getattr(errno, "WSAECONNREFUSED", 10061),
+    }
+    httpx_refused_types: tuple[type[BaseException], ...]
+    try:
+        from httpx import ConnectError, ConnectTimeout, ReadError
+
+        httpx_refused_types = (ConnectError, ConnectTimeout, ReadError)
+    except ImportError:  # pragma: no cover - httpx is a hard dep but stay defensive
+        httpx_refused_types = ()
 
     def _is_connection_refused(exc: BaseException) -> bool:
         """Walk an exception chain looking for a connect-refused signal."""
@@ -682,15 +695,12 @@ def _try_mcp_admin(
             seen.add(id(current))
             if isinstance(current, ConnectionRefusedError):
                 return True
-            if isinstance(current, OSError) and getattr(
-                current,
-                "errno",
-                None,
-            ) in (10061, 111):
+            if (
+                isinstance(current, OSError)
+                and getattr(current, "errno", None) in refused_errnos
+            ):
                 return True
-            # httpx.ConnectError / starlette RemoteProtocolError / etc.
-            name = type(current).__name__
-            if name in {"ConnectError", "ConnectTimeout", "ReadError"}:
+            if httpx_refused_types and isinstance(current, httpx_refused_types):
                 return True
             if current.__cause__ is not None:
                 stack.append(current.__cause__)

@@ -342,25 +342,26 @@ class ServiceRegistry:
         """Evict slots whose ``last_access`` is older than the idle TTL.
 
         Caller MUST hold ``self._lock``.  Returns with ``self._lock``
-        still held.  Implements the ADR D4 "Idle sweep" release /
-        reacquire dance: the actual teardown runs outside ``_lock``
-        because ``close_project`` itself re-enters ``_lock``, and
-        ``threading.Lock`` is not reentrant.
+        still held.  Pops every victim from ``_projects`` *while the
+        lock is held* so a concurrent :meth:`lease` cannot resurrect
+        a slot that is about to be torn down, then runs the actual
+        teardown (watcher stop + store close) outside ``_lock``.
         """
         if self._idle_ttl_seconds <= 0:
             return
         now = time.monotonic()
-        victims = [
-            r
-            for r, s in self._projects.items()
-            if s.ref_count == 0 and (now - s.last_access) >= self._idle_ttl_seconds
-        ]
-        if not victims:
+        victim_slots: list[tuple[Path, ProjectSlot]] = []
+        for r, s in list(self._projects.items()):
+            if s.ref_count == 0 and (now - s.last_access) >= self._idle_ttl_seconds:
+                self._projects.pop(r, None)
+                self._root_locks.pop(r, None)
+                victim_slots.append((r, s))
+        if not victim_slots:
             return
         self._lock.release()
         try:
-            for root in victims:
-                self._close_evicted(root, reason="idle")
+            for root, slot in victim_slots:
+                self._teardown_slot(root, slot, reason="idle")
         finally:
             self._lock.acquire()
 
@@ -369,9 +370,10 @@ class ServiceRegistry:
 
         Caller MUST hold ``self._lock``.  If the registry is below the
         cap, returns immediately.  Otherwise selects the slot with the
-        smallest ``last_access`` among ``ref_count == 0`` candidates
-        and evicts it; raises :class:`RegistryFullError` if every slot
-        is busy.
+        smallest ``last_access`` among ``ref_count == 0`` candidates,
+        pops it from ``_projects`` *under the lock*, then runs teardown
+        outside the lock.  Raises :class:`RegistryFullError` if every
+        slot is busy.
 
         Args:
             root: The root being admitted (unused beyond diagnostics).
@@ -389,23 +391,65 @@ class ServiceRegistry:
         if not candidates:
             raise RegistryFullError(self._max_projects)
         candidates.sort()
-        victim = candidates[0][1]
-        # Release _lock so _close_evicted can take it via close_project.
+        victim_root = candidates[0][1]
+        # Pop under the lock so a concurrent lease() cannot resurrect
+        # the slot before teardown completes.
+        victim_slot = self._projects.pop(victim_root, None)
+        self._root_locks.pop(victim_root, None)
+        if victim_slot is None:
+            return
         self._lock.release()
         try:
-            self._close_evicted(victim, reason="lru")
+            self._teardown_slot(victim_root, victim_slot, reason="lru")
         finally:
             self._lock.acquire()
 
-    def _close_evicted(self, root: Path, reason: str) -> None:
-        """Tear down a slot selected by the sweeper or LRU admit.
+    def _teardown_slot(
+        self,
+        root: Path,
+        slot: ProjectSlot,
+        *,
+        reason: str,
+    ) -> None:
+        """Run the watcher-stop + store-close teardown for an evicted slot.
 
-        Delegates to :meth:`close_project` so the single teardown path
-        (watcher stop → store close) is exercised and logs the eviction
-        reason at ``INFO`` level.
+        Caller MUST have already removed *slot* from ``self._projects``.
+        Caller MUST NOT hold ``self._lock``.  Mirrors the teardown order
+        used by :meth:`close_project` (watcher first, then store) so that
+        ``incremental_index()`` cannot fire against a closed store.
         """
-        self.close_project(root)
+        if self._on_close_project is not None:
+            self._on_close_project(root)
+        slot.graph_cache.invalidate()
+        slot.store.close()
         logger.info("Evicted ProjectSlot %s (reason=%s)", root, reason)
+
+    def try_evict(self, root: Path) -> tuple[bool, str]:
+        """Manually evict *root* atomically.
+
+        Used by the ``evict_project`` MCP admin tool and the
+        ``vaultspec-rag service projects evict`` CLI command.  All
+        decisions (existence + busy check + pop) happen under
+        ``self._lock`` so a concurrent :meth:`lease` cannot race the
+        evict.  Teardown runs outside the lock per the same protocol
+        as :meth:`_sweep_idle` and :meth:`_admit_with_lru`.
+
+        Returns:
+            ``(True, "forced")`` when the slot was evicted,
+            ``(False, "busy")`` when ``ref_count > 0``,
+            ``(False, "not_found")`` when no slot exists for *root*.
+        """
+        target = root.resolve()
+        with self._lock:
+            slot = self._projects.get(target)
+            if slot is None:
+                return (False, "not_found")
+            if slot.ref_count > 0:
+                return (False, "busy")
+            self._projects.pop(target, None)
+            self._root_locks.pop(target, None)
+        self._teardown_slot(target, slot, reason="forced")
+        return (True, "forced")
 
     def busy_roots(self) -> list[Path]:
         """Return a list of resolved roots with ``ref_count > 0``."""
