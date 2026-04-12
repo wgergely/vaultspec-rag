@@ -78,6 +78,31 @@ class DaemonRotatingFileHandler(RotatingFileHandler):
     """
 
     @override
+    def shouldRollover(self, record: logging.LogRecord) -> int:
+        """Decide rollover from on-disk file size, not the handler's own writes.
+
+        :class:`RotatingFileHandler.shouldRollover` measures
+        ``self.stream.tell()`` which only reflects bytes the handler itself
+        wrote.  In the daemon, ``print()``, uvicorn access logs, and core's
+        :class:`rich.RichHandler` (which we re-route by ``dup2``-ing fds 1
+        and 2 onto the same file) all bypass the handler's stream and grow
+        the file directly.  Without this override, the handler under-counts
+        the file size and never triggers rollover even after the on-disk
+        log balloons past ``maxBytes``.
+        """
+        if self.stream is None:
+            self.stream = self._open()
+        if self.maxBytes > 0:
+            try:
+                size = os.fstat(self.stream.fileno()).st_size
+            except OSError:
+                size = self.stream.tell()
+            msg = f"{self.format(record)}\n"
+            if size + len(msg) >= self.maxBytes:
+                return 1
+        return 0
+
+    @override
     def doRollover(self) -> None:
         """Rotate the log file, then re-``dup2`` fds 1 and 2 onto the stream.
 
