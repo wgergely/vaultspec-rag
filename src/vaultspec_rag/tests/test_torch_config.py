@@ -746,3 +746,198 @@ def test_apply_with_existing_user_index(tmp_path: Path) -> None:
     assert "private" in after
     # And we didn't accidentally add a second cu130 entry.
     assert after.count("pytorch-cu130") == 2  # name + source.index reference
+
+
+# ---------------------------------------------------------------------------
+# Round 2 — real-world shapes (#83 follow-up audit)
+# ---------------------------------------------------------------------------
+
+
+def test_load_strips_utf8_bom(tmp_path: Path) -> None:
+    """REAL-01 regression: a leading UTF-8 BOM (saved by Notepad / VS
+    Code "UTF-8 with BOM" / Windows git with certain ``core.autocrlf``)
+    used to crash ``tomlkit.parse`` with "Empty key at line 1". The
+    fix uses ``utf-8-sig`` so the BOM is transparently stripped.
+    """
+    p = tmp_path / "pyproject.toml"
+    p.write_bytes(b"\xef\xbb\xbf" + b'[project]\nname = "bom"\nversion = "0.1.0"\n')
+    # Detect must not raise and must classify normally.
+    assert tc.detect_state(p) == tc.TorchConfigState.MISSING
+    # Apply must succeed and produce a canonical file.
+    rep = tc.apply_patch(p)
+    assert rep.action == "applied"
+    assert tc.detect_state(p) == tc.TorchConfigState.CANONICAL
+
+
+def test_apply_preserves_crlf_line_endings(tmp_path: Path) -> None:
+    """REAL-02 regression: a Windows pyproject with CRLF line endings
+    used to be rewritten as LF on the very first install, causing a
+    git diff to show every existing line as changed. The fix sniffs
+    CR-bytes pre-parse and re-encodes after ``tomlkit.dumps``.
+    """
+    p = tmp_path / "pyproject.toml"
+    p.write_bytes(
+        b'[project]\r\nname = "crlf"\r\nversion = "0.1.0"\r\ndependencies = []\r\n'
+    )
+    crlf_before = p.read_bytes().count(b"\r\n")
+    assert crlf_before == 4
+    tc.apply_patch(p)
+    crlf_after = p.read_bytes().count(b"\r\n")
+    # Every original CRLF still present (and more added by the patch).
+    assert crlf_after >= crlf_before
+    # Sanity: no bare LF lurking in what should be CRLF-only output.
+    raw = p.read_bytes()
+    bare_lf = raw.count(b"\n") - raw.count(b"\r\n")
+    assert bare_lf == 0, f"bare LF count={bare_lf}; expected 0 in CRLF file"
+
+
+def test_remove_preserves_crlf_line_endings(tmp_path: Path) -> None:
+    """Round-trip CRLF preservation: write CRLF, apply, remove —
+    the file must end up with CRLF line endings throughout (not the
+    LF tomlkit emits by default).
+    """
+    p = tmp_path / "pyproject.toml"
+    p.write_bytes(
+        b'[project]\r\nname = "crlf"\r\nversion = "0.1.0"\r\ndependencies = []\r\n'
+    )
+    tc.apply_patch(p)
+    tc.remove_patch(p)
+    raw = p.read_bytes()
+    bare_lf = raw.count(b"\n") - raw.count(b"\r\n")
+    assert bare_lf == 0, raw
+
+
+def test_apply_lf_file_stays_lf(tmp_path: Path) -> None:
+    """Negative pair: a pure-LF file must NOT gain CRLF after apply.
+    The sniff-and-restore logic must default to LF when no CRLF was
+    present on disk.
+    """
+    p = tmp_path / "pyproject.toml"
+    p.write_bytes(b'[project]\nname = "lf"\nversion = "0.1.0"\n')
+    tc.apply_patch(p)
+    raw = p.read_bytes()
+    assert b"\r\n" not in raw, raw
+
+
+def test_has_direct_torch_dep_in_poetry_dependencies(tmp_path: Path) -> None:
+    """REAL-03: Poetry's ``[tool.poetry.dependencies]`` is
+    ``Mapping[name → spec]``, not a list. The detector must see
+    ``torch = "^2.4"`` as a direct dep.
+    """
+    p = tmp_path / "pyproject.toml"
+    _write(
+        p,
+        "[tool.poetry]\n"
+        'name = "demo"\n'
+        "\n"
+        "[tool.poetry.dependencies]\n"
+        'python = "^3.11"\n'
+        'torch = "^2.4"\n',
+    )
+    found, location = tc.has_direct_torch_dep(p)
+    assert found is True
+    assert location == "[tool.poetry.dependencies]"
+
+
+def test_has_direct_torch_dep_in_poetry_group(tmp_path: Path) -> None:
+    p = tmp_path / "pyproject.toml"
+    _write(
+        p,
+        "[tool.poetry]\n"
+        'name = "demo"\n'
+        "\n"
+        "[tool.poetry.dependencies]\n"
+        'python = "^3.11"\n'
+        "\n"
+        "[tool.poetry.group.gpu.dependencies]\n"
+        'torch = "^2.4"\n',
+    )
+    found, location = tc.has_direct_torch_dep(p)
+    assert found is True
+    assert location == "[tool.poetry.group.gpu.dependencies]"
+
+
+def test_has_direct_torch_dep_in_pdm_dev_dependencies(tmp_path: Path) -> None:
+    """PDM's ``[tool.pdm.dev-dependencies]`` is the same
+    ``Mapping[group → list[str]]`` shape as PEP 735.
+    """
+    p = tmp_path / "pyproject.toml"
+    _write(
+        p,
+        "[project]\n"
+        'name = "demo"\n'
+        'dependencies = ["vaultspec-rag"]\n'
+        "\n"
+        "[tool.pdm.dev-dependencies]\n"
+        'test = ["pytest", "torch>=2.4"]\n',
+    )
+    found, location = tc.has_direct_torch_dep(p)
+    assert found is True
+    assert location == "[tool.pdm.dev-dependencies].test"
+
+
+def test_has_direct_torch_dep_in_uv_dev_dependencies(tmp_path: Path) -> None:
+    """uv's pre-PEP-735 ``[tool.uv].dev-dependencies`` (still common)."""
+    p = tmp_path / "pyproject.toml"
+    _write(
+        p,
+        "[project]\n"
+        'name = "demo"\n'
+        'dependencies = ["vaultspec-rag"]\n'
+        "\n"
+        "[tool.uv]\n"
+        'dev-dependencies = ["pytest", "torch>=2.4"]\n',
+    )
+    found, location = tc.has_direct_torch_dep(p)
+    assert found is True
+    assert location == "[tool.uv].dev-dependencies"
+
+
+def test_has_direct_torch_dep_poetry_without_torch_returns_false(
+    tmp_path: Path,
+) -> None:
+    """Negative pair to the Poetry tests: a Poetry project without
+    torch must still classify as no-direct-dep.
+    """
+    p = tmp_path / "pyproject.toml"
+    _write(
+        p,
+        "[tool.poetry]\n"
+        'name = "demo"\n'
+        "\n"
+        "[tool.poetry.dependencies]\n"
+        'python = "^3.11"\n'
+        'numpy = "*"\n',
+    )
+    found, location = tc.has_direct_torch_dep(p)
+    assert found is False
+    assert location == ""
+
+
+def test_apply_on_inline_sources_form(tmp_path: Path) -> None:
+    """Gemini round-2 finding: ``sources = { torch = [...] }`` inline-
+    form previously classified as MISSING via the inline-aware detector
+    but then crashed in ``_ensure_torch_source`` with TypeError. The
+    fix accepts ``InlineTable`` symmetrically across detect/apply/remove.
+
+    Construct a state where the inline form exists but does NOT contain
+    a canonical torch entry, so apply has to mutate. (When the inline
+    form already contains a canonical entry, detect returns CANONICAL
+    and apply short-circuits.)
+    """
+    p = tmp_path / "pyproject.toml"
+    _write(
+        p,
+        "[project]\n"
+        'name = "demo"\n'
+        "\n"
+        "[tool.uv]\n"
+        "sources = { numpy = { workspace = true } }\n",
+    )
+    # Detect: MISSING (cu130 not present).
+    assert tc.detect_state(p) == tc.TorchConfigState.MISSING
+    # Apply must NOT raise TypeError.
+    rep = tc.apply_patch(p)
+    assert rep.action == "applied", rep.conflicts
+    # File must reparse and reach CANONICAL.
+    assert tc.detect_state(p) == tc.TorchConfigState.CANONICAL

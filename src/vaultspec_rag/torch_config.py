@@ -140,12 +140,40 @@ def manual_snippet() -> str:
     )
 
 
+def _detect_crlf(pyproject: Path) -> bool:
+    """Return True when ``pyproject`` uses CRLF line endings on disk.
+
+    Sniffs the raw bytes (not the decoded text) so the answer is the
+    real on-disk encoding, immune to ``newline=`` translation. A
+    Windows pyproject with ``\\r\\n`` line endings should round-trip
+    through apply / remove without losing them — ``tomlkit.dumps``
+    always emits LF, so the writer must restore the original
+    convention before the atomic write or the user gets a noisy
+    git diff that touches every existing line on the very first
+    install.
+    """
+    try:
+        return b"\r\n" in pyproject.read_bytes()
+    except OSError:
+        return False
+
+
 def _load(pyproject: Path) -> TOMLDocument | None:
-    """Load and parse the pyproject.toml, or return None if absent."""
+    """Load and parse the pyproject.toml, or return None if absent.
+
+    Reads with ``utf-8-sig`` so a leading UTF-8 BOM (``U+FEFF``) is
+    transparently stripped. Files saved from Notepad / "UTF-8 with BOM"
+    in VS Code / git on Windows with certain ``core.autocrlf`` settings
+    can carry a BOM that tomlkit's parser rejects as an empty bare
+    key. ``tomllib`` (stdlib) accepts the BOM; tomlkit does not. The
+    ``-sig`` codec is forgiving for files without a BOM, so the change
+    is upward-compatible: every file that previously parsed continues
+    to parse unchanged.
+    """
     if not pyproject.is_file():
         return None
     try:
-        return tomlkit.parse(pyproject.read_text(encoding="utf-8"))
+        return tomlkit.parse(pyproject.read_text(encoding="utf-8-sig"))
     except Exception as exc:
         logger.warning("pyproject.toml parse failed at %s: %s", pyproject, exc)
         raise
@@ -447,11 +475,17 @@ def apply_patch(pyproject: Path) -> PatchReport:
         return report
 
     # MISSING → write.
+    uses_crlf = _detect_crlf(pyproject)
     _ensure_tool_uv_index(doc)
     _ensure_torch_source(doc)
     new_text = tomlkit.dumps(doc)
     # Reparse to confirm validity before the write crosses the FS boundary.
     tomlkit.parse(new_text)
+    if uses_crlf:
+        # tomlkit emits LF; restore the file's original CRLF so the
+        # diff stays minimal. tomlkit's parser accepts both endings,
+        # so the validation reparse above still applies.
+        new_text = new_text.replace("\n", "\r\n")
     atomic_write(pyproject, new_text)
     report.action = "applied"
     report.preview = manual_snippet()
@@ -487,10 +521,13 @@ def remove_patch(pyproject: Path) -> PatchReport:
         return report
 
     # CANONICAL → remove.
+    uses_crlf = _detect_crlf(pyproject)
     _drop_cu130_index(doc)
     _drop_torch_source(doc)
     new_text = tomlkit.dumps(doc)
     tomlkit.parse(new_text)
+    if uses_crlf:
+        new_text = new_text.replace("\n", "\r\n")
     atomic_write(pyproject, new_text)
     report.action = "removed"
     return report
@@ -526,10 +563,28 @@ def _is_torch_requirement(req: object) -> bool:
 def _iter_dep_lists(doc: TOMLDocument) -> list[tuple[str, Any]]:
     """Yield ``(label, sequence)`` for every direct-dependency surface.
 
-    Covers the three idiomatic shapes a consumer can express torch in:
-    ``[project].dependencies`` (PEP 621), ``[project].optional-dependencies.*``
-    (PEP 621 extras), and ``[dependency-groups].*`` (PEP 735). Returns
-    a label so callers can report exactly where torch was found.
+    Covers the four common shapes a consumer can declare torch in:
+
+    - ``[project].dependencies`` (PEP 621)
+    - ``[project].optional-dependencies.*`` (PEP 621 extras)
+    - ``[dependency-groups].*`` (PEP 735)
+    - ``[tool.uv].dev-dependencies`` (uv's pre-PEP-735 dev-deps shape,
+      still present on many existing projects)
+
+    Plus the two non-PEP-621 build backends rag's users actually run
+    into:
+
+    - Poetry: ``[tool.poetry.dependencies]`` /
+      ``[tool.poetry.group.*.dependencies]`` (Mapping[name → spec]).
+      We synthesise a list of the *names* so ``_is_torch_requirement``
+      matches them — the spec strings are not PEP 508 in Poetry.
+    - PDM: ``[tool.pdm.dev-dependencies]`` (Mapping[group → list[str]]),
+      same shape as PEP 735.
+
+    Without these branches a Poetry/PDM user with ``torch`` correctly
+    declared still triggers the "not a direct dep" warning, and the
+    suggested fix (``add to [project].dependencies``) would break their
+    build.
     """
     found: list[tuple[str, Any]] = []
     project = doc.get("project")
@@ -552,6 +607,48 @@ def _iter_dep_lists(doc: TOMLDocument) -> list[tuple[str, Any]]:
         for name, group in groups.items():
             if isinstance(group, list):
                 found.append((f"[dependency-groups].{name}", group))
+
+    tool = doc.get("tool")
+    if not isinstance(tool, (Table, OutOfOrderTableProxy, InlineTable)):
+        return found
+
+    uv = tool.get("uv")
+    if isinstance(uv, (Table, OutOfOrderTableProxy, InlineTable)):
+        uv_dev = uv.get("dev-dependencies")
+        if isinstance(uv_dev, list):
+            found.append(("[tool.uv].dev-dependencies", uv_dev))
+
+    poetry = tool.get("poetry")
+    if isinstance(poetry, (Table, OutOfOrderTableProxy, InlineTable)):
+        # Poetry's ``[tool.poetry.dependencies]`` is ``Mapping[name → spec]``.
+        # The keys are bare package names; we synthesise a list of those
+        # so ``_is_torch_requirement`` ("torch") matches.
+        pdeps = poetry.get("dependencies")
+        if isinstance(pdeps, (Table, OutOfOrderTableProxy, InlineTable)):
+            found.append(("[tool.poetry.dependencies]", list(pdeps.keys())))
+        pgroups = poetry.get("group")
+        if isinstance(pgroups, (Table, OutOfOrderTableProxy, InlineTable)):
+            for gname, gtable in pgroups.items():
+                if not isinstance(gtable, (Table, OutOfOrderTableProxy, InlineTable)):
+                    continue
+                gdeps = gtable.get("dependencies")
+                if isinstance(gdeps, (Table, OutOfOrderTableProxy, InlineTable)):
+                    found.append(
+                        (
+                            f"[tool.poetry.group.{gname}.dependencies]",
+                            list(gdeps.keys()),
+                        )
+                    )
+
+    pdm = tool.get("pdm")
+    if isinstance(pdm, (Table, OutOfOrderTableProxy, InlineTable)):
+        # PDM ``[tool.pdm.dev-dependencies]`` is ``Mapping[group → list[str]]``,
+        # same shape as PEP 735 ``[dependency-groups]``.
+        pdm_dev = pdm.get("dev-dependencies")
+        if isinstance(pdm_dev, (Table, OutOfOrderTableProxy, InlineTable)):
+            for gname, gdeps in pdm_dev.items():
+                if isinstance(gdeps, list):
+                    found.append((f"[tool.pdm.dev-dependencies].{gname}", gdeps))
     return found
 
 
@@ -670,10 +767,17 @@ def _ensure_tool_uv_index(doc: TOMLDocument) -> None:
 
 
 def _ensure_torch_source(doc: TOMLDocument) -> None:
-    """Ensure ``[tool.uv.sources]`` has a cu130 torch entry."""
+    """Ensure ``[tool.uv.sources]`` has a cu130 torch entry.
+
+    Accepts ``InlineTable`` symmetric with :func:`_torch_sources` and
+    :func:`_drop_torch_source`. Without it, a project that wrote
+    ``sources = { … }`` inline classifies as MISSING via the inline-
+    aware detector, then crashes here with TypeError when apply tries
+    to mutate.
+    """
     uv = _get_or_create_tool_uv(doc)
     sources = uv.setdefault("sources", tomlkit.table())
-    if not isinstance(sources, (Table, OutOfOrderTableProxy)):
+    if not isinstance(sources, (Table, OutOfOrderTableProxy, InlineTable)):
         raise TypeError("pyproject.toml [tool.uv.sources] is not a table")
 
     inline = tomlkit.inline_table()
