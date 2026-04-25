@@ -857,6 +857,35 @@ def test_has_direct_torch_dep_in_poetry_group(tmp_path: Path) -> None:
     assert location == "[tool.poetry.group.gpu.dependencies]"
 
 
+def test_has_direct_torch_dep_in_poetry_legacy_dev_dependencies(
+    tmp_path: Path,
+) -> None:
+    """Pre-1.2 Poetry expressed dev deps as
+    ``[tool.poetry.dev-dependencies]``. Poetry 1.2+ moved them under
+    ``[tool.poetry.group.dev.dependencies]`` but the legacy section
+    is still produced by older ``poetry add`` invocations and still
+    on countless deployed pyprojects. The detector must find torch
+    in the legacy section so users on those projects don't get the
+    misleading "not a direct dep" warning.
+    """
+    p = tmp_path / "pyproject.toml"
+    _write(
+        p,
+        "[tool.poetry]\n"
+        'name = "demo"\n'
+        "\n"
+        "[tool.poetry.dependencies]\n"
+        'python = "^3.11"\n'
+        "\n"
+        "[tool.poetry.dev-dependencies]\n"
+        'pytest = "*"\n'
+        'torch = "^2.4"\n',
+    )
+    found, location = tc.has_direct_torch_dep(p)
+    assert found is True
+    assert location == "[tool.poetry.dev-dependencies]"
+
+
 def test_has_direct_torch_dep_in_pdm_dev_dependencies(tmp_path: Path) -> None:
     """PDM's ``[tool.pdm.dev-dependencies]`` is the same
     ``Mapping[group → list[str]]`` shape as PEP 735.

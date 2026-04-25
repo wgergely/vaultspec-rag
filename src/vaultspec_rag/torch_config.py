@@ -626,6 +626,13 @@ def _iter_dep_lists(doc: TOMLDocument) -> list[tuple[str, Any]]:
         pdeps = poetry.get("dependencies")
         if isinstance(pdeps, (Table, OutOfOrderTableProxy, InlineTable)):
             found.append(("[tool.poetry.dependencies]", list(pdeps.keys())))
+        # Pre-1.2 Poetry expressed dev deps as ``[tool.poetry.dev-dependencies]``.
+        # Poetry 1.2+ moved them under ``[tool.poetry.group.dev.dependencies]``
+        # but the legacy section is still produced by older `poetry add`
+        # invocations and still on countless deployed pyprojects.
+        pdev = poetry.get("dev-dependencies")
+        if isinstance(pdev, (Table, OutOfOrderTableProxy, InlineTable)):
+            found.append(("[tool.poetry.dev-dependencies]", list(pdev.keys())))
         pgroups = poetry.get("group")
         if isinstance(pgroups, (Table, OutOfOrderTableProxy, InlineTable)):
             for gname, gtable in pgroups.items():
