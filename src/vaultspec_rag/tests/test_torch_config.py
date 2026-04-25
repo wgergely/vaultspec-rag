@@ -969,6 +969,56 @@ def test_has_direct_torch_dep_in_pdm_dev_dependencies(tmp_path: Path) -> None:
     assert location == "[tool.pdm.dev-dependencies].test"
 
 
+def test_has_direct_torch_dep_in_hatch_env_dependencies_list(tmp_path: Path) -> None:
+    """Gemini round-6 finding: Hatch's
+    ``[tool.hatch.envs.<env>] dependencies = [...]`` (list of PEP 508
+    strings) is the most common Hatch dev-dep surface.
+    """
+    p = tmp_path / "pyproject.toml"
+    _write(
+        p,
+        '[project]\nname = "demo"\n'
+        "\n[tool.hatch.envs.default]\n"
+        'dependencies = ["pytest", "torch>=2.4"]\n',
+    )
+    found, location = tc.has_direct_torch_dep(p)
+    assert found is True
+    assert location == "[tool.hatch.envs.default].dependencies"
+
+
+def test_has_direct_torch_dep_in_hatch_env_extra_dependencies(tmp_path: Path) -> None:
+    """Hatch ``extra-dependencies`` is a sibling key to
+    ``dependencies`` and just as common in env definitions.
+    """
+    p = tmp_path / "pyproject.toml"
+    _write(
+        p,
+        '[project]\nname = "demo"\n'
+        "\n[tool.hatch.envs.test]\n"
+        'extra-dependencies = ["torch>=2.4"]\n',
+    )
+    found, location = tc.has_direct_torch_dep(p)
+    assert found is True
+    assert location == "[tool.hatch.envs.test].extra-dependencies"
+
+
+def test_has_direct_torch_dep_in_hatch_env_dependencies_table(tmp_path: Path) -> None:
+    """The table form ``[tool.hatch.envs.<env>.dependencies] torch =
+    "^2.4"`` is less common but still legal Hatch config — and
+    conventional in projects migrated from Poetry.
+    """
+    p = tmp_path / "pyproject.toml"
+    _write(
+        p,
+        '[project]\nname = "demo"\n'
+        "\n[tool.hatch.envs.gpu.dependencies]\n"
+        'torch = "^2.4"\n',
+    )
+    found, location = tc.has_direct_torch_dep(p)
+    assert found is True
+    assert location == "[tool.hatch.envs.gpu.dependencies]"
+
+
 def test_has_direct_torch_dep_in_uv_dev_dependencies(tmp_path: Path) -> None:
     """uv's pre-PEP-735 ``[tool.uv].dev-dependencies`` (still common)."""
     p = tmp_path / "pyproject.toml"

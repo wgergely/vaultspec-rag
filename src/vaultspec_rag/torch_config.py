@@ -757,6 +757,32 @@ def _iter_dep_lists(doc: TOMLDocument) -> list[tuple[str, Any]]:
             for gname, gdeps in pdm_dev.items():
                 if isinstance(gdeps, list):
                     found.append((f"[tool.pdm.dev-dependencies].{gname}", gdeps))
+
+    hatch = tool.get("hatch")
+    if isinstance(hatch, (Table, OutOfOrderTableProxy, InlineTable)):
+        # Hatch envs (``[tool.hatch.envs.<env>]``) carry per-environment
+        # dependency lists. Two surfaces are common in real projects:
+        # ``dependencies`` / ``extra-dependencies`` as PEP 508 lists,
+        # and the legacy ``[tool.hatch.envs.<env>.dependencies]`` table
+        # form (``Mapping[name → spec]``, same shape as Poetry deps).
+        # Both must be checked so a Hatch user with torch declared
+        # doesn't trigger the "not a direct dep" warning.
+        envs = hatch.get("envs")
+        if isinstance(envs, (Table, OutOfOrderTableProxy, InlineTable)):
+            for ename, etable in envs.items():
+                if not isinstance(etable, (Table, OutOfOrderTableProxy, InlineTable)):
+                    continue
+                for key in ("dependencies", "extra-dependencies"):
+                    edeps = etable.get(key)
+                    if isinstance(edeps, list):
+                        found.append((f"[tool.hatch.envs.{ename}].{key}", edeps))
+                    elif isinstance(edeps, (Table, OutOfOrderTableProxy, InlineTable)):
+                        found.append(
+                            (
+                                f"[tool.hatch.envs.{ename}.{key}]",
+                                list(edeps.keys()),
+                            )
+                        )
     return found
 
 
