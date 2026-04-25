@@ -2429,7 +2429,13 @@ def _render_install_report(report: Any) -> None:
         t_colour = {"succeeded": "green", "failed": "red"}.get(tsync, "yellow")
         console.print(f"uv sync --reinstall-package torch: [{t_colour}]{tsync}[/]")
     for warning in report.warnings:
-        console.print(f"[yellow]warning:[/] {warning}")
+        # Warnings carry user-pyproject-derived strings (literal TOML
+        # keys like ``[tool.uv.sources]``, raw exception messages,
+        # tails of uv stderr) — Rich would parse those as markup tags
+        # and silently drop the bracketed tokens. Render the prefix
+        # with markup, then the body verbatim.
+        console.print("[yellow]warning:[/] ", end="")
+        console.print(warning, markup=False, highlight=False)
 
 
 def _render_uninstall_report(report: Any) -> None:
@@ -2456,6 +2462,7 @@ def _render_uninstall_report(report: Any) -> None:
         "absent": "dim",
         "dry_run": "yellow",
         "skipped": "yellow",
+        "error": "red",
     }.get(tc_action, "white")
     console.print(f"torch-config: [{tc_colour}]{tc_action}[/]")
     for conflict in getattr(report, "torch_config_conflicts", []):
@@ -2465,7 +2472,10 @@ def _render_uninstall_report(report: Any) -> None:
         console.print("  [yellow]conflict:[/] ", end="")
         console.print(conflict, markup=False, highlight=False)
     for warning in report.warnings:
-        console.print(f"[yellow]warning:[/] {warning}")
+        # Same markup-leak guard as _render_install_report; see comment
+        # there for the rationale.
+        console.print("[yellow]warning:[/] ", end="")
+        console.print(warning, markup=False, highlight=False)
 
 
 if __name__ == "__main__":

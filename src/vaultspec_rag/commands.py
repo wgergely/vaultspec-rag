@@ -342,6 +342,12 @@ def _run_torch_config_install(
         return
     if state == torch_config.TorchConfigState.CANONICAL:
         report.torch_config_action = "already"
+        # Idempotent re-runs still need the transitive-dep diagnostic —
+        # the fix is required every run, not just on the first write.
+        # Without this, a user who ran install once, never added torch
+        # as a direct dep, and runs install again gets "already" with
+        # no warning even though resolution still pulls cpu-torch.
+        _maybe_warn_transitive_dep(pyproject, report)
         return
     if state == torch_config.TorchConfigState.CUSTOMISED:
         # Detect returns no conflicts on CUSTOMISED; run apply to get
@@ -364,6 +370,10 @@ def _run_torch_config_install(
     # state is MISSING.
     if dry_run:
         report.torch_config_action = "dry_run"
+        # Surface the transitive-dep preview during dry-run too, so the
+        # most actionable warning is not hidden behind the wet-run gate.
+        # Otherwise the "preview" misleads: clean preview, then surprise.
+        _maybe_warn_transitive_dep(pyproject, report, dry_run=True)
         return
 
     # ``--force`` is the user's blanket opt-in for destructive intent
@@ -410,6 +420,24 @@ def _run_torch_config_install(
                 "to apply, or --no-torch-config to opt out."
             )
             return
+        except Exception as exc:
+            # Any other exception from a custom ``confirm`` hook (e.g.
+            # ``click.Abort`` raised by Rich's Confirm.ask in some
+            # detached-stdio terminals, or an IDE-injected callback
+            # raising its own type) must NOT tear down the rest of the
+            # install. Torch-config is documented as a non-fatal step;
+            # fold the failure into the same warning taxonomy as the
+            # other prompt-side branches and continue.
+            logger.warning(
+                "torch-config confirm() raised %s: %s", type(exc).__name__, exc
+            )
+            report.torch_config_action = "declined"
+            report.warnings.append(
+                f"torch-config patch skipped: confirm prompt raised "
+                f"{type(exc).__name__}. Re-run with --yes or --force to bypass "
+                f"the prompt, or --no-torch-config to opt out."
+            )
+            return
         if not approved:
             report.torch_config_action = "declined"
             return
@@ -427,25 +455,48 @@ def _run_torch_config_install(
     if patch_report.action != "applied":
         return
 
-    # uv silently ignores ``[tool.uv.sources]`` for transitive deps,
-    # so the patch is a no-op when ``torch`` is only pulled in via
-    # ``vaultspec-rag``'s ``Requires-Dist``. Surface a warning naming
-    # the canonical fix (add ``torch>=2.4`` as a direct dep). We
-    # check AFTER the write so the diagnostic reflects the file the
-    # user is now looking at.
-    direct, _location = torch_config.has_direct_torch_dep(pyproject)
-    if not direct:
-        report.warnings.append(
-            "torch-config patched, but `torch` is not a direct dependency "
-            "of this project. uv ignores [tool.uv.sources] for purely "
-            "transitive packages, so the cu130 pin will not take effect. "
-            "Add `torch>=2.4` to [project].dependencies or "
-            "[dependency-groups].dev, then run "
-            "`uv lock --refresh-package torch && uv sync`."
-        )
+    # The patch landed; the workspace is now in CANONICAL state. Surface
+    # the same transitive-dep diagnostic the CANONICAL short-circuit
+    # surfaces, so the warning fires regardless of whether bytes were
+    # written today.
+    _maybe_warn_transitive_dep(pyproject, report)
 
     if sync_after:
         _run_uv_sync_torch(target=target, report=report)
+
+
+def _maybe_warn_transitive_dep(
+    pyproject: Path, report: InstallReport, *, dry_run: bool = False
+) -> None:
+    """Append the transitive-dep warning when ``torch`` is not a direct dep.
+
+    uv silently ignores ``[tool.uv.sources]`` for purely-transitive
+    packages, so the cu130 pin is a no-op when ``torch`` only enters
+    resolution via ``vaultspec-rag``'s ``Requires-Dist``. The check
+    must fire on every wet-run path that leaves the workspace in a
+    canonical state (fresh apply AND idempotent re-run) and on dry-run
+    previews of MISSING — otherwise the warning hides behind paths
+    the user hits more often than first install.
+
+    Args:
+        pyproject: Path to the consumer's ``pyproject.toml``.
+        report: The install report to mutate.
+        dry_run: When True, prefix the warning with "(dry-run preview)"
+            so the user knows the diagnostic reflects what the wet run
+            would do, not state on disk after the call.
+    """
+    direct, _location = torch_config.has_direct_torch_dep(pyproject)
+    if direct:
+        return
+    prefix = "(dry-run preview) " if dry_run else ""
+    report.warnings.append(
+        f"{prefix}torch-config patched, but `torch` is not a direct dependency "
+        "of this project. uv ignores [tool.uv.sources] for purely "
+        "transitive packages, so the cu130 pin will not take effect. "
+        "Add `torch>=2.4` to [project].dependencies or "
+        "[dependency-groups].dev, then run "
+        "`uv lock --refresh-package torch && uv sync`."
+    )
 
 
 def _run_uv_sync_torch(*, target: Path, report: InstallReport) -> None:
@@ -453,7 +504,11 @@ def _run_uv_sync_torch(*, target: Path, report: InstallReport) -> None:
 
     Non-fatal: failures are recorded as warnings, never raised. Runs
     with ``check=False`` so we can surface uv's own stderr in the
-    report without a Python traceback.
+    report without a Python traceback. Result-classification logic
+    lives in :func:`_classify_uv_sync_result` so it can be exercised
+    by tests without going through ``subprocess`` PATH resolution
+    (Windows ``CreateProcess`` only auto-tries ``.exe``, which makes
+    ``.cmd`` / ``.bat`` stubs unreliable cross-platform).
     """
     try:
         proc = subprocess.run(
@@ -475,22 +530,54 @@ def _run_uv_sync_torch(*, target: Path, report: InstallReport) -> None:
         report.warnings.append(f"uv sync failed to launch: {exc}")
         return
 
-    if proc.returncode == 0:
-        report.torch_sync_action = "succeeded"
-        return
+    action, warning = _classify_uv_sync_result(
+        returncode=proc.returncode,
+        stdout=proc.stdout or "",
+        stderr=proc.stderr or "",
+    )
+    report.torch_sync_action = action
+    if warning is not None:
+        report.warnings.append(warning)
 
-    report.torch_sync_action = "failed"
-    stderr = (proc.stderr or "").strip()
-    if stderr:
-        tail = "\n".join(stderr.splitlines()[-5:])
-        report.warnings.append(
+
+def _classify_uv_sync_result(
+    *, returncode: int, stdout: str, stderr: str
+) -> tuple[str, str | None]:
+    """Classify the outcome of ``uv sync`` by exit code and streams.
+
+    Pure function: takes the captured streams from ``subprocess.run``
+    and returns ``(action, warning_or_none)`` for the install report.
+    Centralising the stream-priority logic here lets tests pin every
+    branch (success, stderr-failed, stdout-only-failed, both-empty
+    failed) without forging subprocesses.
+
+    uv writes resolution failures to stderr most of the time, but
+    certain ``--locked`` mismatches and lockfile-conflict renderings
+    land on stdout — surface whichever stream carries a payload so
+    the user has something actionable to read.
+    """
+    if returncode == 0:
+        return "succeeded", None
+    stderr_s = stderr.strip()
+    stdout_s = stdout.strip()
+    if stderr_s:
+        tail = "\n".join(stderr_s.splitlines()[-5:])
+        return (
+            "failed",
             f"uv sync --reinstall-package torch exited with code "
-            f"{proc.returncode}; last stderr lines:\n{tail}"
+            f"{returncode}; last stderr lines:\n{tail}",
         )
-    else:
-        report.warnings.append(
-            f"uv sync --reinstall-package torch exited with code {proc.returncode}"
+    if stdout_s:
+        tail = "\n".join(stdout_s.splitlines()[-5:])
+        return (
+            "failed",
+            f"uv sync --reinstall-package torch exited with code "
+            f"{returncode}; last stdout lines:\n{tail}",
         )
+    return (
+        "failed",
+        f"uv sync --reinstall-package torch exited with code {returncode}",
+    )
 
 
 def _rollback_seeded(rules_dir: Path, seeded: list[str], report: InstallReport) -> None:
@@ -573,11 +660,16 @@ def uninstall_run(
     report = UninstallReport(action=action, target=target)
 
     if not (target / ".vaultspec").is_dir():
+        # No ``.vaultspec/`` means rag was never installed at this
+        # target — anything we found in ``pyproject.toml`` belongs to
+        # the user (or to a different project that happened to land in
+        # the same directory). Mutating their file here is a data-loss
+        # surprise, not a symmetric reversal. The torch-config sweep
+        # therefore demotes to a dry-run regardless of ``--force`` so
+        # the report still surfaces the canonical block (and the path
+        # to remove it) without rewriting a file rag does not own.
         report.warnings.append(f"no .vaultspec/ at {target}; nothing to uninstall")
-        # Even when .vaultspec is gone, the consumer's pyproject.toml
-        # may still carry rag's torch-config block. Attempt symmetric
-        # removal so the workspace lands in a clean state.
-        _run_torch_config_uninstall(target=target, report=report, dry_run=dry_run)
+        _run_torch_config_uninstall(target=target, report=report, dry_run=True)
         return report
 
     rules_dir = target / ".vaultspec" / "rules"

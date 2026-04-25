@@ -4,12 +4,9 @@ from __future__ import annotations
 
 import os
 import typing
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
-
-if TYPE_CHECKING:
-    from pathlib import Path
 from typer.testing import CliRunner
 
 from vaultspec_rag.cli import (
@@ -451,3 +448,166 @@ class TestCpuOnlyMessageRendering:
         """
         out = self._render()
         assert "\\" not in out, out
+
+
+class TestRenderInstallReport:
+    """CLI-01 regression: the install/uninstall warning loop must NOT
+    parse warning bodies as Rich markup. The transitive-dep warning
+    embeds literal ``[tool.uv.sources]``, ``[project].dependencies``,
+    and ``[dependency-groups].dev``; uv stderr tails embed raw
+    ``[…]`` tokens; raw exception messages embed ``[tool]`` strings
+    from the historic OutOfOrderTableProxy bug. Rendering any of these
+    via ``markup=True`` silently drops the bracketed substrings — a
+    direct repeat of the bug Gemini caught for the CPU_ONLY copy, in
+    a different channel.
+    """
+
+    @staticmethod
+    def _render(report: object) -> str:
+        import io
+
+        from rich.console import Console
+
+        from vaultspec_rag import cli as cli_mod
+
+        buf = io.StringIO()
+        original = cli_mod.console
+        cli_mod.console = Console(
+            file=buf, force_terminal=False, color_system=None, width=200
+        )
+        try:
+            cli_mod._render_install_report(report)
+        finally:
+            cli_mod.console = original
+        return buf.getvalue()
+
+    def test_warning_with_literal_toml_keys_preserved(self) -> None:
+        from vaultspec_rag.commands import InstallReport
+
+        warning = (
+            "torch-config patched, but `torch` is not a direct dependency. "
+            "uv ignores [tool.uv.sources] for purely transitive packages, "
+            "so the cu130 pin will not take effect. "
+            "Add `torch>=2.4` to [project].dependencies or "
+            "[dependency-groups].dev."
+        )
+        report = InstallReport(
+            action="install",
+            target=Path("."),
+            torch_config_action="applied",
+            warnings=[warning],
+        )
+        out = self._render(report)
+        # All three TOML key tokens must survive the render.
+        assert "[tool.uv.sources]" in out, out
+        assert "[project].dependencies" in out, out
+        assert "[dependency-groups].dev" in out, out
+
+    def test_warning_with_uv_stderr_tail_preserved(self) -> None:
+        """Realistic shape: uv stderr embedded in a warning body via
+        the new INSTALL-03 tail. ``[project]`` and ``[tool]`` tokens
+        in uv's own error rendering must survive.
+        """
+        from vaultspec_rag.commands import InstallReport
+
+        report = InstallReport(
+            action="install",
+            target=Path("."),
+            torch_config_action="applied",
+            warnings=[
+                "uv sync --reinstall-package torch exited with code 1; "
+                "last stderr lines:\n"
+                "error: Failed to resolve [project] root\n"
+                "error: see [tool.uv] config"
+            ],
+        )
+        out = self._render(report)
+        assert "[project]" in out
+        assert "[tool.uv]" in out
+
+    def test_conflict_with_aot_token_preserved(self) -> None:
+        """Conflict surface (already had its own markup-off treatment
+        before this PR — guard it now with a rendering test so a
+        future maintainer cannot accidentally collapse the two-line
+        treatment back into a single ``f"... {conflict}"`` print).
+        """
+        from vaultspec_rag.commands import InstallReport
+
+        report = InstallReport(
+            action="install",
+            target=Path("."),
+            torch_config_action="conflict",
+            torch_config_conflicts=[
+                '[[tool.uv.index]] entry name="pytorch-cu130" url-mismatch'
+            ],
+        )
+        out = self._render(report)
+        assert "[[tool.uv.index]]" in out
+        assert 'name="pytorch-cu130"' in out
+
+    def test_skipped_eof_action_renders_yellow(self) -> None:
+        """TEST-12 regression: the new ``skipped-eof`` action label
+        must reach the colour map. A regression that dropped it would
+        render the label in default-white instead of yellow.
+        """
+        from vaultspec_rag.commands import InstallReport
+
+        report = InstallReport(
+            action="install",
+            target=Path("."),
+            torch_config_action="skipped-eof",
+        )
+        out = self._render(report)
+        # Action token survives.
+        assert "skipped-eof" in out
+
+
+class TestRenderUninstallReport:
+    """Symmetric guard rail for the uninstall renderer."""
+
+    @staticmethod
+    def _render(report: object) -> str:
+        import io
+
+        from rich.console import Console
+
+        from vaultspec_rag import cli as cli_mod
+
+        buf = io.StringIO()
+        original = cli_mod.console
+        cli_mod.console = Console(
+            file=buf, force_terminal=False, color_system=None, width=200
+        )
+        try:
+            cli_mod._render_uninstall_report(report)
+        finally:
+            cli_mod.console = original
+        return buf.getvalue()
+
+    def test_warning_with_literal_toml_keys_preserved(self) -> None:
+        from vaultspec_rag.commands import UninstallReport
+
+        report = UninstallReport(
+            action="uninstall",
+            target=Path("."),
+            warnings=[
+                "no .vaultspec/ at /tmp/foo; "
+                "torch-config block in [tool.uv.sources] left intact"
+            ],
+        )
+        out = self._render(report)
+        assert "[tool.uv.sources]" in out
+
+    def test_error_action_renders(self) -> None:
+        """INSTALL-08 follow-up: uninstall now has ``error`` in its
+        colour map. Just verify the label reaches the renderer.
+        """
+        from vaultspec_rag.commands import UninstallReport
+
+        report = UninstallReport(
+            action="uninstall",
+            target=Path("."),
+            torch_config_action="error",
+        )
+        out = self._render(report)
+        assert "error" in out

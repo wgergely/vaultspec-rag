@@ -376,3 +376,320 @@ class TestUninstallTorchConfig:
         report = uninstall_run(path=consumer_workspace, force=False)
         assert report.torch_config_action == "dry_run"
         assert _sha(consumer_workspace / "pyproject.toml") == sha_before
+
+    def test_uninstall_without_vaultspec_dir_does_not_mutate_pyproject(
+        self, tmp_path: Path
+    ) -> None:
+        """INSTALL-01 regression: a directory with no ``.vaultspec/`` is
+        NOT an install target rag owns. Even when the user passes
+        ``--force`` and the pyproject happens to contain a canonical
+        cu130 block (e.g. they pasted the README snippet, or it's a
+        sibling project), uninstall must not rewrite the file.
+
+        The data-loss bug: pre-fix, ``uninstall --force`` on such a
+        directory silently stripped the cu130 block while the warning
+        said "nothing to uninstall".
+        """
+        ws = tmp_path / "not-a-rag-project"
+        ws.mkdir()
+        (ws / "pyproject.toml").write_text(
+            "[project]\n"
+            'name = "demo"\n'
+            'version = "0.1.0"\n'
+            'dependencies = ["vaultspec-rag", "torch>=2.4"]\n'
+            "\n"
+            "[[tool.uv.index]]\n"
+            'name = "pytorch-cu130"\n'
+            'url = "https://download.pytorch.org/whl/cu130"\n'
+            "explicit = true\n"
+            "\n"
+            "[tool.uv.sources]\n"
+            "torch = [\n"
+            '    {index = "pytorch-cu130", '
+            "marker = \"sys_platform == 'linux' or sys_platform == 'win32'\"},\n"
+            "]\n",
+            encoding="utf-8",
+            newline="",
+        )
+        sha_before = _sha(ws / "pyproject.toml")
+        report = uninstall_run(path=ws, force=True)
+        # The pyproject must NOT be mutated.
+        assert _sha(ws / "pyproject.toml") == sha_before
+        # The torch-config sweep should report a non-destructive outcome.
+        assert report.torch_config_action in ("dry_run", "absent", "skipped")
+        # And the warning text should still tell the user nothing was done.
+        assert any("nothing to uninstall" in w for w in report.warnings)
+
+
+class TestInstallTorchConfigFollowups:
+    """Coverage for the audit findings addressed in the same commit
+    series — INSTALL-02 (confirm exception types), INSTALL-03 (uv sync
+    stdout fallback), INSTALL-05/06 (transitive-dep on already +
+    dry-run), TEST-01 (uv sync action branches), TEST-02 (manual_snippet
+    bytes), TEST-03 (force vs no-torch-config precedence), and the
+    Gemini-flagged ``InlineTable`` / ``(`` PEP 508 edge cases.
+    """
+
+    def test_install_force_with_no_torch_config_disables_patch(
+        self, consumer_workspace: Path
+    ) -> None:
+        """TEST-03 / INSTALL precedence: ``--no-torch-config`` must win
+        over ``--force``. A future refactor that hoisted the
+        force-implies-yes coercion above the configure_torch
+        short-circuit would silently apply the patch despite the user's
+        explicit opt-out.
+        """
+        sha_before = _sha(consumer_workspace / "pyproject.toml")
+        report = install_run(
+            path=consumer_workspace,
+            force=True,
+            configure_torch=False,
+            assume_yes=False,
+        )
+        assert report.torch_config_action == "disabled"
+        assert _sha(consumer_workspace / "pyproject.toml") == sha_before
+
+    def test_install_confirm_click_abort_does_not_kill_install(
+        self, consumer_workspace: Path
+    ) -> None:
+        """INSTALL-02 regression: a custom ``confirm`` raising any
+        exception type other than KeyboardInterrupt/EOFError must fold
+        into the warning taxonomy, not propagate up and tear down the
+        rest of the install.
+        """
+        import click
+
+        def click_abort_confirm(_prompt: str) -> bool:
+            raise click.exceptions.Abort
+
+        # Must NOT raise; install_run must return a populated report.
+        report = install_run(
+            path=consumer_workspace,
+            assume_yes=False,
+            confirm=click_abort_confirm,
+        )
+        assert report.torch_config_action == "declined"
+        assert any(
+            "Abort" in w and ("--yes" in w or "--force" in w) for w in report.warnings
+        ), report.warnings
+        # Pyproject untouched.
+        assert tc.detect_state(consumer_workspace / "pyproject.toml") == (
+            tc.TorchConfigState.MISSING
+        )
+
+    def test_install_confirm_runtime_error_does_not_kill_install(
+        self, consumer_workspace: Path
+    ) -> None:
+        """Sibling of the click.Abort case — any unexpected exception
+        from a programmatic confirm hook should land in the same
+        graceful-degradation branch, not crash the install.
+        """
+
+        def boom(_prompt: str) -> bool:
+            raise RuntimeError("hook misconfigured")
+
+        report = install_run(
+            path=consumer_workspace,
+            assume_yes=False,
+            confirm=boom,
+        )
+        assert report.torch_config_action == "declined"
+        # Warning names the exception type so the user knows where to look.
+        assert any("RuntimeError" in w for w in report.warnings)
+
+    def test_install_transitive_warning_fires_on_idempotent_rerun(
+        self, consumer_workspace: Path
+    ) -> None:
+        """INSTALL-05 regression: the transitive-dep warning is the
+        most actionable diagnostic rag emits. Without it, a user who
+        ran install once, never fixed their direct deps, and re-runs
+        gets ``torch_config_action="already"`` with no warnings —
+        even though the fix is needed every run.
+        """
+        # First install lays down the canonical block.
+        first = install_run(path=consumer_workspace, assume_yes=True)
+        assert first.torch_config_action == "applied"
+        assert any("direct dependency" in w for w in first.warnings)
+        # Second install hits the CANONICAL short-circuit; warning
+        # must still fire because torch is still purely transitive.
+        second = install_run(path=consumer_workspace, assume_yes=True)
+        assert second.torch_config_action == "already"
+        assert any("direct dependency" in w for w in second.warnings), second.warnings
+
+    def test_install_transitive_warning_fires_on_dry_run(
+        self, consumer_workspace: Path
+    ) -> None:
+        """INSTALL-06 regression: dry-run is supposed to show what the
+        wet run would do. Hiding the transitive-dep warning behind the
+        dry-run gate makes the preview misleading — clean preview, then
+        surprise on the real run.
+        """
+        report = install_run(path=consumer_workspace, dry_run=True)
+        assert report.torch_config_action == "dry_run"
+        # Warning fires AND is labelled as a preview.
+        assert any(
+            "(dry-run preview)" in w and "direct dependency" in w
+            for w in report.warnings
+        ), report.warnings
+
+    def test_install_transitive_warning_silent_when_torch_is_direct(
+        self, tmp_path: Path
+    ) -> None:
+        """Negative pair to the rerun/dry-run tests above — false
+        positives would train users to ignore the warning. With torch
+        as a direct dep, no transitive warning fires regardless of
+        which path produced the canonical state.
+        """
+        ws = tmp_path / "with-direct-torch"
+        ws.mkdir()
+        (ws / "pyproject.toml").write_text(
+            "[project]\n"
+            'name = "demo"\n'
+            'version = "0.1.0"\n'
+            'dependencies = ["vaultspec-rag", "torch>=2.4"]\n',
+            encoding="utf-8",
+            newline="",
+        )
+        first = install_run(path=ws, assume_yes=True)
+        assert first.torch_config_action == "applied"
+        assert not any("direct dependency" in w for w in first.warnings)
+        # Idempotent re-run: still no warning.
+        second = install_run(path=ws, assume_yes=True)
+        assert second.torch_config_action == "already"
+        assert not any("direct dependency" in w for w in second.warnings)
+        # Dry-run on a missing-direct-dep path was tested elsewhere;
+        # here the path is CANONICAL on dry-run, so no warning either.
+        third = install_run(path=ws, dry_run=True)
+        assert third.torch_config_action == "already"
+        assert not any("direct dependency" in w for w in third.warnings)
+
+
+class TestUvSyncTorchBranches:
+    """TEST-01 coverage: pin every branch of the uv-sync result
+    classifier. Tests target the pure helper
+    :func:`vaultspec_rag.commands._classify_uv_sync_result` so the
+    branch coverage does not depend on Windows ``CreateProcess`` PATH
+    resolution (which only auto-tries ``.exe`` and so cannot be driven
+    by a ``.cmd`` stub script). Plus one end-to-end test for the
+    ``uv-not-found`` branch which the helper does not see (raised by
+    ``subprocess`` before ``returncode`` exists).
+    """
+
+    def test_classify_succeeded_when_returncode_zero(self) -> None:
+        from vaultspec_rag.commands import _classify_uv_sync_result
+
+        action, warning = _classify_uv_sync_result(returncode=0, stdout="", stderr="")
+        assert action == "succeeded"
+        assert warning is None
+
+    def test_classify_failed_with_stderr_tail(self) -> None:
+        from vaultspec_rag.commands import _classify_uv_sync_result
+
+        action, warning = _classify_uv_sync_result(
+            returncode=1, stdout="", stderr="resolution failed\nmore detail"
+        )
+        assert action == "failed"
+        assert warning is not None
+        assert "last stderr lines" in warning
+        assert "resolution failed" in warning
+        assert "exited with code 1" in warning
+
+    def test_classify_failed_with_stdout_fallback(self) -> None:
+        """INSTALL-03 regression: stderr empty, stdout populated → use
+        stdout's tail. Pre-fix, the user got only the bare exit code.
+        """
+        from vaultspec_rag.commands import _classify_uv_sync_result
+
+        action, warning = _classify_uv_sync_result(
+            returncode=2, stdout="lockfile mismatch on torch", stderr=""
+        )
+        assert action == "failed"
+        assert warning is not None
+        assert "last stdout lines" in warning
+        assert "lockfile mismatch on torch" in warning
+
+    def test_classify_failed_with_both_streams_empty(self) -> None:
+        """When uv exits non-zero with no diagnostics, the warning
+        carries only the exit code — but the action must still be
+        ``failed`` so renderers colour it red.
+        """
+        from vaultspec_rag.commands import _classify_uv_sync_result
+
+        action, warning = _classify_uv_sync_result(returncode=255, stdout="", stderr="")
+        assert action == "failed"
+        assert warning is not None
+        assert "exited with code 255" in warning
+        # No tail block when there is nothing to tail.
+        assert "last stderr lines" not in warning
+        assert "last stdout lines" not in warning
+
+    def test_classify_failed_tails_only_last_five_lines(self) -> None:
+        """Long uv outputs must be tailed to keep warning readable."""
+        from vaultspec_rag.commands import _classify_uv_sync_result
+
+        many = "\n".join(f"line {i}" for i in range(1, 21))
+        action, warning = _classify_uv_sync_result(returncode=1, stdout="", stderr=many)
+        assert action == "failed"
+        assert warning is not None
+        # The tail must contain the final five lines and exclude line 1.
+        assert "line 20" in warning
+        assert "line 16" in warning
+        assert "line 15" not in warning  # 6th-from-last; outside the tail
+        assert "line 1\n" not in warning
+
+    def test_install_sync_after_records_uv_not_found_when_uv_absent(
+        self, tmp_path: Path
+    ) -> None:
+        """End-to-end test for the only branch the pure helper does
+        not cover — the FileNotFoundError raised when ``uv`` is not
+        resolvable on PATH at all. Drives ``install_run`` against a
+        consumer that needs a fresh apply and points PATH at an empty
+        directory so subprocess can't find any ``uv``.
+        """
+        import os
+
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        (ws / "pyproject.toml").write_text(
+            "[project]\n"
+            'name = "demo"\n'
+            'version = "0.1.0"\n'
+            'dependencies = ["vaultspec-rag", "torch>=2.4"]\n',
+            encoding="utf-8",
+            newline="",
+        )
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+        original_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = str(empty_dir)
+        try:
+            report = install_run(path=ws, assume_yes=True, sync_after=True)
+        finally:
+            os.environ["PATH"] = original_path
+        assert report.torch_sync_action == "uv-not-found"
+        assert any("uv` is not on PATH" in w for w in report.warnings)
+
+
+class TestManualSnippetBytes:
+    """TEST-02 coverage: pin the bytes ``manual_snippet()`` emits so a
+    future copy edit cannot silently desync README, error messages,
+    and runtime output.
+    """
+
+    def test_manual_snippet_byte_for_byte(self) -> None:
+        expected = (
+            "\n"
+            "[[tool.uv.index]]\n"
+            'name = "pytorch-cu130"\n'
+            'url = "https://download.pytorch.org/whl/cu130"\n'
+            "explicit = true\n"
+            "\n"
+            "[tool.uv.sources]\n"
+            'torch = [{ index = "pytorch-cu130", '
+            "marker = \"sys_platform == 'linux' or sys_platform == 'win32'\" }]\n"
+            "\n"
+            "# uv ignores [tool.uv.sources] for purely-transitive deps.\n"
+            "# Add torch as a direct dep too, e.g. in [project].dependencies\n"
+            '# or [dependency-groups].dev:  "torch>=2.4"\n'
+        )
+        assert tc.manual_snippet() == expected

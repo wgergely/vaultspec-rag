@@ -195,12 +195,18 @@ def _torch_sources(doc: TOMLDocument) -> Any:
     Returns whatever tomlkit has at that key so the caller can
     classify unusual shapes (scalar, standard Table, inline-table
     array, or missing). Strictly-typed callers downcast as needed.
+
+    ``sources`` may be either the standard-table form (``[tool.uv.sources]``
+    + line of keys), the proxy form when interleaved with non-uv
+    sections, OR the inline-table form (``sources = { torch = [...] }``)
+    that tomlkit returns as :class:`tomlkit.items.InlineTable`. All
+    three expose the ``.get(key)`` Mapping surface we exercise here.
     """
     uv = _tool_uv(doc)
     if uv is None:
         return None
     sources = uv.get("sources")
-    if not isinstance(sources, (Table, OutOfOrderTableProxy)):
+    if not isinstance(sources, (Table, OutOfOrderTableProxy, InlineTable)):
         return None
     return sources.get("torch")
 
@@ -504,8 +510,13 @@ def _is_torch_requirement(req: object) -> bool:
     name = req.strip()
     # Cut at the first PEP 508 separator. Order matters: ``@`` may
     # appear in a URL but never before whitespace in a name; the
-    # ``min(...)`` collapses whichever boundary comes first.
-    boundaries = [name.find(c) for c in (" ", "[", "<", ">", "=", "!", "~", "@", ";")]
+    # ``min(...)`` collapses whichever boundary comes first. ``(``
+    # closes a PEP 508 name when the version specifier is wrapped
+    # in parentheses (``torch (>=2.4)`` — legal under PEP 508 grammar
+    # though uncommon in pyproject sources).
+    boundaries = [
+        name.find(c) for c in (" ", "[", "(", "<", ">", "=", "!", "~", "@", ";")
+    ]
     cuts = [i for i in boundaries if i != -1]
     if cuts:
         name = name[: min(cuts)]
@@ -522,17 +533,22 @@ def _iter_dep_lists(doc: TOMLDocument) -> list[tuple[str, Any]]:
     """
     found: list[tuple[str, Any]] = []
     project = doc.get("project")
-    if isinstance(project, (Table, OutOfOrderTableProxy)):
+    # ``project`` is normally a standard table; ``optional-dependencies``
+    # and ``dependency-groups`` may be expressed as inline tables
+    # (``optional-dependencies = { gpu = [...] }``), which tomlkit returns
+    # as :class:`tomlkit.items.InlineTable`. All three shapes expose the
+    # ``.get(key)`` / ``.items()`` Mapping surface we exercise here.
+    if isinstance(project, (Table, OutOfOrderTableProxy, InlineTable)):
         deps = project.get("dependencies")
         if isinstance(deps, list):
             found.append(("[project].dependencies", deps))
         optional = project.get("optional-dependencies")
-        if isinstance(optional, (Table, OutOfOrderTableProxy)):
+        if isinstance(optional, (Table, OutOfOrderTableProxy, InlineTable)):
             for name, group in optional.items():
                 if isinstance(group, list):
                     found.append((f"[project.optional-dependencies].{name}", group))
     groups = doc.get("dependency-groups")
-    if isinstance(groups, (Table, OutOfOrderTableProxy)):
+    if isinstance(groups, (Table, OutOfOrderTableProxy, InlineTable)):
         for name, group in groups.items():
             if isinstance(group, list):
                 found.append((f"[dependency-groups].{name}", group))
@@ -747,8 +763,11 @@ def _drop_torch_source(doc: TOMLDocument) -> None:
     # shaped as a table. The early-return anti-pattern is avoided:
     # even when sources is absent, the cleanup cascade below must
     # run so that an empty ``[tool.uv]`` left behind by
-    # :func:`_drop_cu130_index` gets dropped.
-    if isinstance(sources, (Table, OutOfOrderTableProxy)):
+    # :func:`_drop_cu130_index` gets dropped. ``InlineTable`` covers
+    # the ``sources = { torch = [...] }`` inline form symmetric with
+    # :func:`_torch_sources` so remove honours every detect-classified
+    # CANONICAL shape.
+    if isinstance(sources, (Table, OutOfOrderTableProxy, InlineTable)):
         torch_entry = sources.get("torch")
         if torch_entry is not None:
             if isinstance(torch_entry, InlineTable | dict) and not isinstance(
