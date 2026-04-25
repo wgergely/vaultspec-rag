@@ -28,8 +28,26 @@ from typing import TYPE_CHECKING, Any, Final
 
 import tomlkit
 from tomlkit import TOMLDocument
+from tomlkit.container import OutOfOrderTableProxy
 from tomlkit.items import AoT, InlineTable, Table
 from vaultspec_core.core.helpers import atomic_write
+
+# tomlkit returns ``OutOfOrderTableProxy`` for any ``[tool.X]`` whose
+# child tables (``[tool.X.Y]``, ``[tool.X.Z]``) are interleaved with
+# unrelated sections — the dominant pyproject.toml shape (e.g.
+# ``[tool.uv]``, ``[tool.ruff]``, ``[tool.uv.sources]`` interspersed).
+# It implements the same Mapping API we exercise (``get``, ``setdefault``,
+# ``__setitem__``, ``__delitem__``, ``__bool__``) but does not subclass
+# ``Table``, so plain ``isinstance(x, Table)`` checks would reject it
+# and force apply / detect onto the wrong code path. Treat it as a
+# table-like surface throughout the module.
+#
+# Use the literal ``isinstance(x, (Table, OutOfOrderTableProxy))`` form
+# inline at every check site so static type-checkers (ty/pyright)
+# narrow to ``Table | OutOfOrderTableProxy`` after the guard. A
+# ``Final[tuple[type, ...]]`` alias defeats that narrowing and forces
+# ``Unknown`` downstream.
+TableLike = Table | OutOfOrderTableProxy
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -46,6 +64,7 @@ __all__ = [
     "apply_patch",
     "detect_state",
     "diagnose_torch",
+    "has_direct_torch_dep",
     "manual_snippet",
     "preview_patch",
     "remove_patch",
@@ -99,7 +118,10 @@ def manual_snippet() -> str:
     """Return the canonical cu130 block as a copy-pasteable string.
 
     Assembled from the three module constants so this string and the
-    shape ``apply_patch`` writes can never drift.
+    shape ``apply_patch`` writes can never drift. Includes a comment
+    spelling out the direct-dependency requirement uv enforces — the
+    source pin is silently ignored when ``torch`` only enters the
+    resolution as a transitive dep of ``vaultspec-rag``.
     """
     return (
         "\n"
@@ -111,6 +133,10 @@ def manual_snippet() -> str:
         "[tool.uv.sources]\n"
         f'torch = [{{ index = "{CU130_INDEX_NAME}", '
         f'marker = "{CU130_MARKER}" }}]\n'
+        "\n"
+        "# uv ignores [tool.uv.sources] for purely-transitive deps.\n"
+        "# Add torch as a direct dep too, e.g. in [project].dependencies\n"
+        '# or [dependency-groups].dev:  "torch>=2.4"\n'
     )
 
 
@@ -125,18 +151,21 @@ def _load(pyproject: Path) -> TOMLDocument | None:
         raise
 
 
-def _tool_uv(doc: TOMLDocument) -> Table | None:
+def _tool_uv(doc: TOMLDocument) -> TableLike | None:
     """Return the ``[tool.uv]`` table, or None.
 
-    Narrowed strictly to :class:`tomlkit.items.Table` — raw ``dict``
-    doesn't surface from tomlkit's parsed document, and requiring it
-    lets the type-checker narrow without a ``type: ignore``.
+    Narrowed to either :class:`tomlkit.items.Table` or
+    :class:`tomlkit.container.OutOfOrderTableProxy`. tomlkit returns
+    the proxy whenever ``[tool.uv]`` and ``[tool.uv.sources]`` (or
+    ``[[tool.uv.index]]``) are interleaved with non-uv sections — the
+    dominant ``[tool.*]`` layout in real-world pyprojects. Both expose
+    the same Mapping surface we touch.
     """
     tool = doc.get("tool")
-    if not isinstance(tool, Table):
+    if not isinstance(tool, (Table, OutOfOrderTableProxy)):
         return None
     uv = tool.get("uv")
-    if not isinstance(uv, Table):
+    if not isinstance(uv, (Table, OutOfOrderTableProxy)):
         return None
     return uv
 
@@ -171,7 +200,7 @@ def _torch_sources(doc: TOMLDocument) -> Any:
     if uv is None:
         return None
     sources = uv.get("sources")
-    if not isinstance(sources, Table):
+    if not isinstance(sources, (Table, OutOfOrderTableProxy)):
         return None
     return sources.get("torch")
 
@@ -461,6 +490,87 @@ def remove_patch(pyproject: Path) -> PatchReport:
     return report
 
 
+def _is_torch_requirement(req: object) -> bool:
+    """Return True if ``req`` (a PEP 508 entry) names ``torch``.
+
+    Strips extras (``torch[extra]``), version specifiers
+    (``torch>=2.4``), URL form (``torch @ https://...``), and any
+    surrounding whitespace before the comparison. Returns False for
+    anything that is not a string — comments, dict-form entries,
+    accidentally-typed integers — to keep the predicate total.
+    """
+    if not isinstance(req, str):
+        return False
+    name = req.strip()
+    # Cut at the first PEP 508 separator. Order matters: ``@`` may
+    # appear in a URL but never before whitespace in a name; the
+    # ``min(...)`` collapses whichever boundary comes first.
+    boundaries = [name.find(c) for c in (" ", "[", "<", ">", "=", "!", "~", "@", ";")]
+    cuts = [i for i in boundaries if i != -1]
+    if cuts:
+        name = name[: min(cuts)]
+    return name.strip().lower() == "torch"
+
+
+def _iter_dep_lists(doc: TOMLDocument) -> list[tuple[str, Any]]:
+    """Yield ``(label, sequence)`` for every direct-dependency surface.
+
+    Covers the three idiomatic shapes a consumer can express torch in:
+    ``[project].dependencies`` (PEP 621), ``[project].optional-dependencies.*``
+    (PEP 621 extras), and ``[dependency-groups].*`` (PEP 735). Returns
+    a label so callers can report exactly where torch was found.
+    """
+    found: list[tuple[str, Any]] = []
+    project = doc.get("project")
+    if isinstance(project, (Table, OutOfOrderTableProxy)):
+        deps = project.get("dependencies")
+        if isinstance(deps, list):
+            found.append(("[project].dependencies", deps))
+        optional = project.get("optional-dependencies")
+        if isinstance(optional, (Table, OutOfOrderTableProxy)):
+            for name, group in optional.items():
+                if isinstance(group, list):
+                    found.append((f"[project.optional-dependencies].{name}", group))
+    groups = doc.get("dependency-groups")
+    if isinstance(groups, (Table, OutOfOrderTableProxy)):
+        for name, group in groups.items():
+            if isinstance(group, list):
+                found.append((f"[dependency-groups].{name}", group))
+    return found
+
+
+def has_direct_torch_dep(pyproject: Path) -> tuple[bool, str]:
+    """Return ``(present, location)`` for a direct ``torch`` dependency.
+
+    uv silently ignores ``[tool.uv.sources]`` entries for purely-
+    transitive packages. The cu130 source pin therefore only takes
+    effect once ``torch`` appears as a direct dep of the consumer
+    project. This helper lets the install flow surface a warning when
+    the patch will be a no-op.
+
+    Args:
+        pyproject: Path to the consumer's ``pyproject.toml``.
+
+    Returns:
+        ``(True, "<location>")`` when torch is found as a direct dep,
+        with ``location`` naming the dotted-key path of the table or
+        list that contained the entry. ``(False, "")`` when absent or
+        when the file cannot be parsed (the install flow already
+        surfaces parse errors elsewhere).
+    """
+    try:
+        doc = _load(pyproject)
+    except Exception:
+        return False, ""
+    if doc is None:
+        return False, ""
+    for label, deps in _iter_dep_lists(doc):
+        for entry in deps:
+            if _is_torch_requirement(entry):
+                return True, label
+    return False, ""
+
+
 def diagnose_torch(cuda: str | None, available: bool) -> TorchDiagnosis:
     """Classify a torch install from its observable CUDA attributes.
 
@@ -488,7 +598,7 @@ def diagnose_torch(cuda: str | None, available: bool) -> TorchDiagnosis:
 # ---------------------------------------------------------------------------
 
 
-def _get_or_create_tool_uv(doc: TOMLDocument) -> Table:
+def _get_or_create_tool_uv(doc: TOMLDocument) -> TableLike:
     """Return the writable ``[tool.uv]`` table, creating it if absent.
 
     Extracted so :func:`_ensure_tool_uv_index` and
@@ -496,12 +606,18 @@ def _get_or_create_tool_uv(doc: TOMLDocument) -> Table:
     how the ``[tool]`` → ``[tool.uv]`` hierarchy is materialised.
     Raises if either level exists but isn't a table (refuses to
     silently clobber a user-owned key).
+
+    Accepts both :class:`tomlkit.items.Table` and
+    :class:`tomlkit.container.OutOfOrderTableProxy`. Both expose the
+    Mapping API we exercise here (``setdefault`` / ``__setitem__``);
+    the proxy is what tomlkit returns whenever ``[tool.X]`` sub-tables
+    are interleaved with unrelated sections.
     """
     tool = doc.setdefault("tool", tomlkit.table())
-    if not isinstance(tool, Table):
+    if not isinstance(tool, (Table, OutOfOrderTableProxy)):
         raise TypeError("pyproject.toml [tool] is not a table")
     uv = tool.setdefault("uv", tomlkit.table())
-    if not isinstance(uv, Table):
+    if not isinstance(uv, (Table, OutOfOrderTableProxy)):
         raise TypeError("pyproject.toml [tool.uv] is not a table")
     return uv
 
@@ -541,7 +657,7 @@ def _ensure_torch_source(doc: TOMLDocument) -> None:
     """Ensure ``[tool.uv.sources]`` has a cu130 torch entry."""
     uv = _get_or_create_tool_uv(doc)
     sources = uv.setdefault("sources", tomlkit.table())
-    if not isinstance(sources, Table):
+    if not isinstance(sources, (Table, OutOfOrderTableProxy)):
         raise TypeError("pyproject.toml [tool.uv.sources] is not a table")
 
     inline = tomlkit.inline_table()
@@ -579,7 +695,13 @@ def _ensure_torch_source(doc: TOMLDocument) -> None:
 
 
 def _drop_cu130_index(doc: TOMLDocument) -> None:
-    """Remove the canonical cu130 entry from ``[[tool.uv.index]]``."""
+    """Remove the canonical cu130 entry from ``[[tool.uv.index]]``.
+
+    OutOfOrderTableProxy quirk applies here too: re-fetch ``uv`` via
+    :func:`_tool_uv` immediately before ``del uv["index"]`` instead of
+    holding a stale reference, so a freshly-constructed proxy carries
+    consistent internal table positions.
+    """
     indices = _indices(doc)
     if indices is None:
         return
@@ -608,6 +730,13 @@ def _drop_torch_source(doc: TOMLDocument) -> None:
     :func:`_drop_cu130_index` has already removed the index table —
     both callers run in sequence and the consumer file should end up
     without orphaned empty sections.
+
+    OutOfOrderTableProxy quirk: tomlkit's proxy memoises the position
+    of the underlying tables on construction; a ``__delitem__`` on it
+    invalidates those positions and a second ``__delitem__`` against
+    the SAME proxy can raise ``IndexError``. We work around it by
+    re-fetching the proxy from its parent before each cascade-stage
+    deletion (``del uv["sources"]`` → re-fetch → ``del tool["uv"]``).
     """
     uv = _tool_uv(doc)
     if uv is None:
@@ -619,7 +748,7 @@ def _drop_torch_source(doc: TOMLDocument) -> None:
     # even when sources is absent, the cleanup cascade below must
     # run so that an empty ``[tool.uv]`` left behind by
     # :func:`_drop_cu130_index` gets dropped.
-    if isinstance(sources, Table):
+    if isinstance(sources, (Table, OutOfOrderTableProxy)):
         torch_entry = sources.get("torch")
         if torch_entry is not None:
             if isinstance(torch_entry, InlineTable | dict) and not isinstance(
@@ -642,13 +771,22 @@ def _drop_torch_source(doc: TOMLDocument) -> None:
                     del sources["torch"]
 
         if not sources:
-            del uv["sources"]
+            # Re-fetch ``uv`` before the cascade-stage delete —
+            # ``_drop_cu130_index`` may have already mutated this same
+            # proxy via ``del uv["index"]``. See the OutOfOrderTableProxy
+            # note in this function's docstring.
+            uv = _tool_uv(doc)
+            if uv is not None:
+                del uv["sources"]
 
     # Cleanup cascades: always try to drop empty parent tables so a
     # full uninstall (index + torch) leaves no orphaned sections.
-    if not uv:
+    # Re-fetch ``uv`` again so the emptiness check runs on a fresh
+    # proxy with consistent internal state.
+    uv = _tool_uv(doc)
+    if uv is not None and not uv:
         tool = doc.get("tool")
-        if isinstance(tool, Table):
+        if isinstance(tool, (Table, OutOfOrderTableProxy)):
             del tool["uv"]
             if not tool:
                 del doc["tool"]

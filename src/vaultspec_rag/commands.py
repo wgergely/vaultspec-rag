@@ -290,6 +290,7 @@ def install_run(
         target=target,
         report=report,
         dry_run=dry_run,
+        force=force,
         configure_torch=configure_torch,
         assume_yes=assume_yes,
         sync_after=sync_after,
@@ -304,6 +305,7 @@ def _run_torch_config_install(
     target: Path,
     report: InstallReport,
     dry_run: bool,
+    force: bool,
     configure_torch: bool,
     assume_yes: bool,
     sync_after: bool,
@@ -364,15 +366,23 @@ def _run_torch_config_install(
         report.torch_config_action = "dry_run"
         return
 
-    if not assume_yes:
+    # ``--force`` is the user's blanket opt-in for destructive intent
+    # across the install (re-seed bundled files, prune sync state). It
+    # would be surprising for it not to also bypass the torch-config
+    # confirmation: a user who has typed ``--force`` once expects the
+    # whole flow to land. Treat ``force`` as implying ``assume_yes``
+    # for this step.
+    effective_assume_yes = assume_yes or force
+
+    if not effective_assume_yes:
         if confirm is None:
             # Non-interactive caller (or programmatic use without a
             # prompt hook). Refuse to guess — name the opt-in flags.
             report.torch_config_action = "skipped-non-tty"
             report.warnings.append(
-                "torch-config patch requires confirmation — pass --yes to "
-                "apply, or --no-torch-config to opt out. See "
-                "pyproject.toml shape in `vaultspec-rag install --help`."
+                "torch-config patch requires confirmation — pass --yes "
+                "(or --force) to apply, or --no-torch-config to opt out. "
+                "See pyproject.toml shape in `vaultspec-rag install --help`."
             )
             return
         try:
@@ -380,9 +390,25 @@ def _run_torch_config_install(
                 f"Patch {pyproject} with the cu130 torch index? "
                 f"This lets uv resolve the CUDA torch wheel."
             )
-        except (KeyboardInterrupt, EOFError):
+        except KeyboardInterrupt:
+            # User actively interrupted. Treat as a decline; do not
+            # rewrite the action label, since this is the only branch
+            # that genuinely reflects user intent.
             report.torch_config_action = "declined"
             report.warnings.append("torch-config patch declined by user")
+            return
+        except EOFError:
+            # Non-interactive harness (CI, pipe, IDE-managed shell)
+            # where ``isatty()`` lied. The prompt hit end-of-stream
+            # instead of getting an answer — the user was never asked.
+            # Distinguish from "declined" so users don't read this as
+            # their own choice; name the flag that bypasses the prompt.
+            report.torch_config_action = "skipped-eof"
+            report.warnings.append(
+                "torch-config patch skipped: confirmation prompt hit EOF "
+                "(non-interactive stdin). Re-run with --yes or --force "
+                "to apply, or --no-torch-config to opt out."
+            )
             return
         if not approved:
             report.torch_config_action = "declined"
@@ -400,6 +426,23 @@ def _run_torch_config_install(
 
     if patch_report.action != "applied":
         return
+
+    # uv silently ignores ``[tool.uv.sources]`` for transitive deps,
+    # so the patch is a no-op when ``torch`` is only pulled in via
+    # ``vaultspec-rag``'s ``Requires-Dist``. Surface a warning naming
+    # the canonical fix (add ``torch>=2.4`` as a direct dep). We
+    # check AFTER the write so the diagnostic reflects the file the
+    # user is now looking at.
+    direct, _location = torch_config.has_direct_torch_dep(pyproject)
+    if not direct:
+        report.warnings.append(
+            "torch-config patched, but `torch` is not a direct dependency "
+            "of this project. uv ignores [tool.uv.sources] for purely "
+            "transitive packages, so the cu130 pin will not take effect. "
+            "Add `torch>=2.4` to [project].dependencies or "
+            "[dependency-groups].dev, then run "
+            "`uv lock --refresh-package torch && uv sync`."
+        )
 
     if sync_after:
         _run_uv_sync_torch(target=target, report=report)

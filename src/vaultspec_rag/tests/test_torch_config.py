@@ -394,3 +394,355 @@ def test_rag_own_pyproject_is_canonical() -> None:
     # the file must at least exist for the test to be meaningful.
     assert pyproject.is_file(), f"cannot locate rag pyproject at {pyproject}"
     assert tc.detect_state(pyproject) == tc.TorchConfigState.CANONICAL
+
+
+# ---------------------------------------------------------------------------
+# OutOfOrderTableProxy / scattered ``[tool.*]`` shapes (#83 finding 1)
+#
+# tomlkit returns ``OutOfOrderTableProxy`` for any ``[tool.X]`` whose
+# child tables are interleaved with unrelated sections. This is the
+# dominant pyproject layout. Detection used to misclassify these as
+# MISSING, and apply_patch crashed on the resulting state. Each test
+# below pins one bug-class so future regressions cannot creep back in.
+# ---------------------------------------------------------------------------
+
+
+# Scattered ``[tool.uv]`` / ``[tool.ruff]`` / ``[tool.uv.sources]`` —
+# the exact reproducer from issue #83. A single string keeps the test
+# bodies focused on the assertion rather than fixture plumbing.
+SCATTERED_PROJECT = (
+    "[project]\n"
+    'name = "demo"\n'
+    'version = "0.1.0"\n'
+    'dependencies = ["requests", "torch>=2.4"]\n'
+    "\n"
+    "[tool.uv]\n"
+    "override-dependencies = []\n"
+    "\n"
+    "[tool.ruff]\n"
+    "line-length = 120\n"
+    "\n"
+    "[tool.pytest.ini_options]\n"
+    'testpaths = ["tests"]\n'
+    "\n"
+    "[tool.coverage.run]\n"
+    'source = ["src"]\n'
+)
+
+
+SCATTERED_CANONICAL_TAIL = (
+    "\n"
+    "[[tool.uv.index]]\n"
+    'name = "pytorch-cu130"\n'
+    'url = "https://download.pytorch.org/whl/cu130"\n'
+    "explicit = true\n"
+    "\n"
+    "[tool.ruff.lint]\n"
+    'select = ["E"]\n'
+    "\n"
+    "[tool.uv.sources]\n"
+    "torch = [\n"
+    '    {index = "pytorch-cu130", '
+    "marker = \"sys_platform == 'linux' or sys_platform == 'win32'\"},\n"
+    "]\n"
+)
+
+
+def test_scattered_tool_uv_detect_canonical(tmp_path: Path) -> None:
+    """Scattered ``[tool.uv.*]`` with intervening ``[tool.ruff.lint]``
+    section — tomlkit yields ``OutOfOrderTableProxy`` for ``tool.uv``.
+    Detection must return CANONICAL, not MISSING.
+    """
+    p = tmp_path / "pyproject.toml"
+    _write(p, SCATTERED_PROJECT + SCATTERED_CANONICAL_TAIL)
+    assert tc.detect_state(p) == tc.TorchConfigState.CANONICAL
+
+
+def test_scattered_tool_uv_detect_missing(tmp_path: Path) -> None:
+    """Same scattered layout, but no cu130 block. Must classify as
+    MISSING (not crash, not CUSTOMISED, not NO_PROJECT_FILE).
+    """
+    p = tmp_path / "pyproject.toml"
+    _write(p, SCATTERED_PROJECT)
+    assert tc.detect_state(p) == tc.TorchConfigState.MISSING
+
+
+def test_scattered_tool_uv_apply_writes_patch(tmp_path: Path) -> None:
+    """``apply_patch`` on a scattered MISSING pyproject lands the
+    canonical block without raising on OutOfOrderTableProxy. Round-trip
+    leaves the file CANONICAL.
+    """
+    p = tmp_path / "pyproject.toml"
+    _write(p, SCATTERED_PROJECT)
+    report = tc.apply_patch(p)
+    assert report.action == "applied", report.conflicts
+    assert tc.detect_state(p) == tc.TorchConfigState.CANONICAL
+    after = p.read_text(encoding="utf-8")
+    # User's other tool.* sections survive intact.
+    assert "[tool.ruff]" in after
+    assert "[tool.pytest.ini_options]" in after
+    assert "[tool.coverage.run]" in after
+
+
+def test_scattered_tool_uv_apply_idempotent(tmp_path: Path) -> None:
+    """Apply on already-canonical scattered pyproject is a no-op."""
+    p = tmp_path / "pyproject.toml"
+    _write(p, SCATTERED_PROJECT + SCATTERED_CANONICAL_TAIL)
+    sha_before = _sha(p)
+    report = tc.apply_patch(p)
+    assert report.action == "already"
+    assert _sha(p) == sha_before
+
+
+def test_scattered_tool_uv_remove_succeeds(tmp_path: Path) -> None:
+    """Removal walks the cascade (drop AoT entry → del index →
+    del sources → del uv) without tripping the OutOfOrderTableProxy
+    sequential-delete bug. File reparses cleanly afterwards and the
+    user's other ``[tool.*]`` sections survive.
+    """
+    p = tmp_path / "pyproject.toml"
+    _write(p, SCATTERED_PROJECT + SCATTERED_CANONICAL_TAIL)
+    report = tc.remove_patch(p)
+    assert report.action == "removed"
+    after = p.read_text(encoding="utf-8")
+    # cu130 block gone.
+    assert "pytorch-cu130" not in after
+    assert "[[tool.uv.index]]" not in after
+    # User's other sections survive.
+    assert "[tool.ruff]" in after
+    assert "[tool.ruff.lint]" in after
+    assert "[tool.pytest.ini_options]" in after
+    # File still parses.
+    tomlkit.parse(after)
+
+
+def test_scattered_tool_uv_apply_then_remove_round_trip(tmp_path: Path) -> None:
+    """Apply → remove on a scattered MISSING pyproject leaves a
+    semantically-equivalent project (modulo the cu130 block).
+    """
+    p = tmp_path / "pyproject.toml"
+    _write(p, SCATTERED_PROJECT)
+    orig = tomlkit.parse(SCATTERED_PROJECT).unwrap()
+    tc.apply_patch(p)
+    tc.remove_patch(p)
+    final = tomlkit.parse(p.read_text(encoding="utf-8")).unwrap()
+    # All non-uv tool.* sections preserved with identical content.
+    assert final["project"] == orig["project"]
+    assert final["tool"]["ruff"] == orig["tool"]["ruff"]
+    assert final["tool"]["pytest"] == orig["tool"]["pytest"]
+    assert final["tool"]["coverage"] == orig["tool"]["coverage"]
+
+
+def test_top_level_split_tool_proxy(tmp_path: Path) -> None:
+    """When ``[tool.X]`` and ``[tool.Y]`` sections sandwich a non-tool
+    section, ``doc.get("tool")`` itself becomes ``OutOfOrderTableProxy``
+    (not just ``tool.uv``). Detection and apply must still work.
+    """
+    p = tmp_path / "pyproject.toml"
+    content = (
+        '[project]\nname = "demo"\n'
+        "\n[tool.uv]\noverride-dependencies = []\n"
+        "\n[other]\nx = 1\n"
+        "\n[tool.ruff]\nline-length = 120\n"
+    )
+    _write(p, content)
+    assert tc.detect_state(p) == tc.TorchConfigState.MISSING
+    report = tc.apply_patch(p)
+    assert report.action == "applied", report.conflicts
+    assert tc.detect_state(p) == tc.TorchConfigState.CANONICAL
+
+
+# ---------------------------------------------------------------------------
+# has_direct_torch_dep (#83 finding 4)
+#
+# uv silently ignores [tool.uv.sources] for purely-transitive deps.
+# The helper must detect torch in any of the three idiomatic surfaces.
+# ---------------------------------------------------------------------------
+
+
+def test_has_direct_torch_dep_in_project_dependencies(tmp_path: Path) -> None:
+    p = tmp_path / "pyproject.toml"
+    _write(
+        p,
+        '[project]\nname = "demo"\ndependencies = ["requests", "torch>=2.4"]\n',
+    )
+    found, location = tc.has_direct_torch_dep(p)
+    assert found is True
+    assert location == "[project].dependencies"
+
+
+def test_has_direct_torch_dep_in_dependency_groups(tmp_path: Path) -> None:
+    p = tmp_path / "pyproject.toml"
+    _write(
+        p,
+        '[project]\nname = "demo"\n'
+        "\n[dependency-groups]\n"
+        'dev = ["pytest", "torch>=2.4"]\n',
+    )
+    found, location = tc.has_direct_torch_dep(p)
+    assert found is True
+    assert location == "[dependency-groups].dev"
+
+
+def test_has_direct_torch_dep_in_optional_dependencies(tmp_path: Path) -> None:
+    p = tmp_path / "pyproject.toml"
+    _write(
+        p,
+        '[project]\nname = "demo"\n'
+        "\n[project.optional-dependencies]\n"
+        'gpu = ["torch>=2.4", "triton"]\n',
+    )
+    found, location = tc.has_direct_torch_dep(p)
+    assert found is True
+    assert location == "[project.optional-dependencies].gpu"
+
+
+def test_has_direct_torch_dep_absent(tmp_path: Path) -> None:
+    p = tmp_path / "pyproject.toml"
+    _write(
+        p,
+        '[project]\nname = "demo"\ndependencies = ["requests", "numpy"]\n',
+    )
+    found, location = tc.has_direct_torch_dep(p)
+    assert found is False
+    assert location == ""
+
+
+def test_has_direct_torch_dep_no_project_file(tmp_path: Path) -> None:
+    """Missing pyproject yields ``(False, "")`` — not an exception."""
+    found, location = tc.has_direct_torch_dep(tmp_path / "missing.toml")
+    assert found is False
+    assert location == ""
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected"),
+    [
+        ("torch", True),
+        ("torch>=2.4", True),
+        ("torch >= 2.4", True),
+        ("torch[cuda]>=2.4", True),
+        ("torch == 2.11.0+cu130", True),
+        ("torch ; sys_platform == 'linux'", True),
+        ("torch @ https://download.pytorch.org/whl/cu130/torch-2.11.0.whl", True),
+        ("Torch", True),  # case insensitive normalisation
+        ("torchvision", False),  # prefix match must not fire
+        ("torchaudio>=1.0", False),
+        ("requests", False),
+        ("numpy>=2.0", False),
+        ("", False),
+    ],
+)
+def test_is_torch_requirement_predicate(entry: str, expected: bool) -> None:
+    """The PEP 508 strip predicate underpins ``has_direct_torch_dep``.
+    Each case fixes one parsing trap (extras, markers, URL form,
+    case sensitivity, prefix collisions like ``torchvision``).
+    """
+    # Access the private helper directly; behaviour is part of the
+    # module's contract because ``has_direct_torch_dep`` delegates.
+    assert tc._is_torch_requirement(entry) is expected
+
+
+def test_is_torch_requirement_rejects_non_strings() -> None:
+    """tomlkit can yield non-string entries (e.g. nested tables for
+    PEP 508 dict-form deps in some tooling). Predicate must be total.
+    """
+    assert tc._is_torch_requirement(None) is False
+    assert tc._is_torch_requirement(42) is False
+    assert tc._is_torch_requirement({"name": "torch"}) is False
+
+
+# ---------------------------------------------------------------------------
+# Edge-case TOML shapes (rolling audit findings)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_on_empty_pyproject(tmp_path: Path) -> None:
+    """An empty (zero-byte) pyproject.toml still parses to an empty
+    document. Apply must materialise the full ``[tool.uv]`` hierarchy
+    without crashing on missing parents.
+    """
+    p = tmp_path / "pyproject.toml"
+    _write(p, "")
+    assert tc.detect_state(p) == tc.TorchConfigState.MISSING
+    report = tc.apply_patch(p)
+    assert report.action == "applied"
+    assert tc.detect_state(p) == tc.TorchConfigState.CANONICAL
+
+
+def test_apply_on_pyproject_with_only_tool_uv(tmp_path: Path) -> None:
+    """Pyproject that is just ``[tool.uv]`` with no project section.
+    Less common but legal — apply must not assume ``[project]`` exists.
+    """
+    p = tmp_path / "pyproject.toml"
+    _write(p, "[tool.uv]\noverride-dependencies = []\n")
+    assert tc.detect_state(p) == tc.TorchConfigState.MISSING
+    assert tc.apply_patch(p).action == "applied"
+    assert tc.detect_state(p) == tc.TorchConfigState.CANONICAL
+
+
+def test_apply_preserves_blank_lines_between_sections(tmp_path: Path) -> None:
+    """Blank lines and section ordering survive the patch."""
+    p = tmp_path / "pyproject.toml"
+    content = (
+        '[project]\nname = "demo"\n\n\n'  # extra blank lines
+        "[tool.ruff]\nline-length = 120\n\n"
+        "[tool.pytest.ini_options]\n"
+        'testpaths = ["tests"]\n'
+    )
+    _write(p, content)
+    tc.apply_patch(p)
+    after = p.read_text(encoding="utf-8")
+    # Order preserved.
+    assert after.find("[tool.ruff]") < after.find("[tool.pytest.ini_options]")
+
+
+def test_remove_preserves_user_overrides_in_tool_uv(tmp_path: Path) -> None:
+    """When the user has their own keys in ``[tool.uv]`` (e.g.
+    ``override-dependencies``), removal must drop only our entries
+    and keep their content intact, with no orphaned empty section.
+    """
+    p = tmp_path / "pyproject.toml"
+    content = (
+        PROJECT_ONLY + "\n[tool.uv]\n"
+        'override-dependencies = ["urllib3<3"]\n'
+        "\n[[tool.uv.index]]\n"
+        'name = "pytorch-cu130"\n'
+        'url = "https://download.pytorch.org/whl/cu130"\n'
+        "explicit = true\n"
+        "\n[tool.uv.sources]\n"
+        "torch = [\n"
+        '    {index = "pytorch-cu130", '
+        "marker = \"sys_platform == 'linux' or sys_platform == 'win32'\"},\n"
+        "]\n"
+    )
+    _write(p, content)
+    tc.remove_patch(p)
+    after = p.read_text(encoding="utf-8")
+    assert "[tool.uv]" in after
+    assert "override-dependencies" in after
+    assert '"urllib3<3"' in after
+    assert "pytorch-cu130" not in after
+    tomlkit.parse(after)
+
+
+def test_apply_with_existing_user_index(tmp_path: Path) -> None:
+    """User has their own ``[[tool.uv.index]]`` entry. Apply must
+    *append* to the existing AoT, not replace it.
+    """
+    p = tmp_path / "pyproject.toml"
+    content = (
+        PROJECT_ONLY + "\n[[tool.uv.index]]\n"
+        'name = "private"\n'
+        'url = "https://private.example.com/simple"\n'
+    )
+    _write(p, content)
+    assert tc.detect_state(p) == tc.TorchConfigState.MISSING
+    tc.apply_patch(p)
+    assert tc.detect_state(p) == tc.TorchConfigState.CANONICAL
+    after = p.read_text(encoding="utf-8")
+    # Both indices present.
+    assert "pytorch-cu130" in after
+    assert "private" in after
+    # And we didn't accidentally add a second cu130 entry.
+    assert after.count("pytorch-cu130") == 2  # name + source.index reference

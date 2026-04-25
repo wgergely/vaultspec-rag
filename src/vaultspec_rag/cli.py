@@ -99,7 +99,20 @@ def _handle_gpu_error(exc: Exception) -> None:
             "  [cyan]uv run vaultspec-rag install[/] patches your "
             "pyproject.toml with the cu130 torch index. After patching, "
             "rerun [cyan]uv sync --reinstall-package torch[/].\n\n"
+            "  If install has already run and you are still here, verify:\n"
+            "    1. [cyan]pyproject.toml[/] has [[tool.uv.index]] "
+            '[cyan]name = "pytorch-cu130"[/] and '
+            "[cyan][tool.uv.sources] torch = ...[/]\n"
+            "    2. [cyan]uv.lock[/] has a torch entry with "
+            "[cyan]source = "
+            '{ registry = "https://download.pytorch.org/whl/cu130" }[/] '
+            "(not pypi.org/simple)\n"
+            "    3. If the lockfile still points at PyPI, [cyan]torch[/] must be "
+            "a direct dependency. Add [cyan]torch>=2.4[/] to "
+            "[cyan][project].dependencies[/] or [cyan][dependency-groups].dev[/], "
+            "then run [cyan]uv lock --refresh-package torch && uv sync[/].\n\n"
             "  Or configure manually by adding this to your pyproject.toml:",
+            markup=True,
         )
         # Rich interprets ``[[tool.uv.index]]`` as markup; emit the
         # snippet with markup disabled so brackets render verbatim.
@@ -108,8 +121,17 @@ def _handle_gpu_error(exc: Exception) -> None:
         console.print(
             "[bold red]Error:[/] No CUDA GPU detected.\n"
             "  PyTorch is built with CUDA support, but no CUDA device "
-            "is available. Check your NVIDIA driver and CUDA runtime "
-            "installation.",
+            "is available.\n\n"
+            "  Quick checks:\n"
+            "    1. [cyan]nvidia-smi[/] — confirms the driver sees the GPU. "
+            "If this fails, install/repair the NVIDIA driver.\n"
+            '    2. [cyan]python -c "import torch; print(torch.version.cuda)"[/] '
+            "— prints the CUDA version torch was built against. Your "
+            "driver must support at least this CUDA major.\n"
+            "    3. WSL/Docker users: confirm GPU passthrough is enabled "
+            "([cyan]--gpus all[/] for docker, GPU support enabled in WSL2). "
+            "A GPU visible to the host is not automatically visible inside "
+            "the container/VM.",
         )
     else:
         console.print(f"[bold red]Error:[/] {exc}")
@@ -2377,7 +2399,9 @@ def _render_install_report(report: Any) -> None:
         "declined": "yellow",
         "conflict": "red",
         "absent": "yellow",
+        "error": "red",
         "skipped-non-tty": "yellow",
+        "skipped-eof": "yellow",
     }.get(tc_action, "white")
     console.print(f"torch-config: [{tc_colour}]{tc_action}[/]")
     for conflict in getattr(report, "torch_config_conflicts", []):

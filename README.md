@@ -50,7 +50,16 @@ torch = [
 ]
 ```
 
-then run `uv sync --reinstall-package torch`. `[tool.uv.sources]` declarations in a dependency's own `pyproject.toml` do not propagate to consumers, which is why this step is necessary.
+You also need `torch` as a **direct** dependency of your project — `uv` silently ignores `[tool.uv.sources]` entries for purely-transitive packages, so the source pin only takes effect once `torch` appears in your own dependency lists. Add it to either `[project].dependencies` or `[dependency-groups].dev`:
+
+```toml
+[dependency-groups]
+dev = [
+    "torch>=2.4",
+]
+```
+
+Then run `uv lock --refresh-package torch && uv sync`. The lockfile entry for `torch` should show `source = { registry = "https://download.pytorch.org/whl/cu130" }` (not `pypi.org/simple`); if it still resolves from PyPI, the direct-dep step was missed. `[tool.uv.sources]` declarations in a dependency's own `pyproject.toml` do not propagate to consumers, which is why this step is necessary.
 
 #### Troubleshooting: "PyTorch was installed without CUDA support"
 
