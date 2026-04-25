@@ -40,16 +40,19 @@ from vaultspec_core.core.helpers import atomic_write
 # ``[tool.uv]``, ``[tool.ruff]``, ``[tool.uv.sources]`` interspersed).
 # It implements the same Mapping API we exercise (``get``, ``setdefault``,
 # ``__setitem__``, ``__delitem__``, ``__bool__``) but does not subclass
-# ``Table``, so plain ``isinstance(x, Table)`` checks would reject it
-# and force apply / detect onto the wrong code path. Treat it as a
-# table-like surface throughout the module.
+# ``Table``. ``InlineTable`` is the third shape (``sources = { ... }``
+# inline form) the reader can encounter at the same surfaces. All
+# three expose the same Mapping API; a plain ``isinstance(x, Table)``
+# check rejects the others and forces apply / detect onto the wrong
+# code path. Treat all three as table-like throughout the module.
 #
-# Use the literal ``isinstance(x, (Table, OutOfOrderTableProxy))`` form
-# inline at every check site so static type-checkers (ty/pyright)
-# narrow to ``Table | OutOfOrderTableProxy`` after the guard. A
-# ``Final[tuple[type, ...]]`` alias defeats that narrowing and forces
-# ``Unknown`` downstream.
-TableLike = Table | OutOfOrderTableProxy
+# ``_TABLE_LIKE_TYPES`` is a plain tuple (no ``Final[tuple[type, ...]]``
+# annotation) so static type-checkers (ty/pyright) narrow ``x`` to
+# ``Table | OutOfOrderTableProxy | InlineTable`` after
+# ``isinstance(x, _TABLE_LIKE_TYPES)``. The matching ``TableLike``
+# alias is the union form for return types and parameter annotations.
+TableLike = Table | OutOfOrderTableProxy | InlineTable
+_TABLE_LIKE_TYPES = (Table, OutOfOrderTableProxy, InlineTable)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -238,10 +241,10 @@ def _tool_uv(doc: TOMLDocument) -> TableLike | None:
     the same Mapping surface we touch.
     """
     tool = doc.get("tool")
-    if not isinstance(tool, (Table, OutOfOrderTableProxy)):
+    if not isinstance(tool, _TABLE_LIKE_TYPES):
         return None
     uv = tool.get("uv")
-    if not isinstance(uv, (Table, OutOfOrderTableProxy)):
+    if not isinstance(uv, _TABLE_LIKE_TYPES):
         return None
     return uv
 
@@ -282,7 +285,7 @@ def _torch_sources(doc: TOMLDocument) -> Any:
     if uv is None:
         return None
     sources = uv.get("sources")
-    if not isinstance(sources, (Table, OutOfOrderTableProxy, InlineTable)):
+    if not isinstance(sources, _TABLE_LIKE_TYPES):
         return None
     return sources.get("torch")
 
@@ -623,8 +626,12 @@ def _match_trailing_newline(
     current_trail = _count_trailing(new_bytes, eol_bytes)
     if current_trail == original_trail:
         return new_text
-    # Strip whatever tomlkit emitted, then append the original count.
-    stripped = new_text.rstrip("\r\n")
+    # Surgically strip exactly the EOL run tomlkit emitted, then append
+    # the original count. ``rstrip("\r\n")`` would over-strip any
+    # adjacent CR/LF chars that aren't part of the trailing run; using
+    # the counted slice keeps any non-newline trailing whitespace
+    # intact (rare in TOML but cheap to preserve).
+    stripped = new_text[: -current_trail * len(eol)] if current_trail > 0 else new_text
     return stripped + eol * original_trail
 
 
@@ -694,53 +701,53 @@ def _iter_dep_lists(doc: TOMLDocument) -> list[tuple[str, Any]]:
     # (``optional-dependencies = { gpu = [...] }``), which tomlkit returns
     # as :class:`tomlkit.items.InlineTable`. All three shapes expose the
     # ``.get(key)`` / ``.items()`` Mapping surface we exercise here.
-    if isinstance(project, (Table, OutOfOrderTableProxy, InlineTable)):
+    if isinstance(project, _TABLE_LIKE_TYPES):
         deps = project.get("dependencies")
         if isinstance(deps, list):
             found.append(("[project].dependencies", deps))
         optional = project.get("optional-dependencies")
-        if isinstance(optional, (Table, OutOfOrderTableProxy, InlineTable)):
+        if isinstance(optional, _TABLE_LIKE_TYPES):
             for name, group in optional.items():
                 if isinstance(group, list):
                     found.append((f"[project.optional-dependencies].{name}", group))
     groups = doc.get("dependency-groups")
-    if isinstance(groups, (Table, OutOfOrderTableProxy, InlineTable)):
+    if isinstance(groups, _TABLE_LIKE_TYPES):
         for name, group in groups.items():
             if isinstance(group, list):
                 found.append((f"[dependency-groups].{name}", group))
 
     tool = doc.get("tool")
-    if not isinstance(tool, (Table, OutOfOrderTableProxy, InlineTable)):
+    if not isinstance(tool, _TABLE_LIKE_TYPES):
         return found
 
     uv = tool.get("uv")
-    if isinstance(uv, (Table, OutOfOrderTableProxy, InlineTable)):
+    if isinstance(uv, _TABLE_LIKE_TYPES):
         uv_dev = uv.get("dev-dependencies")
         if isinstance(uv_dev, list):
             found.append(("[tool.uv].dev-dependencies", uv_dev))
 
     poetry = tool.get("poetry")
-    if isinstance(poetry, (Table, OutOfOrderTableProxy, InlineTable)):
+    if isinstance(poetry, _TABLE_LIKE_TYPES):
         # Poetry's ``[tool.poetry.dependencies]`` is ``Mapping[name → spec]``.
         # The keys are bare package names; we synthesise a list of those
         # so ``_is_torch_requirement`` ("torch") matches.
         pdeps = poetry.get("dependencies")
-        if isinstance(pdeps, (Table, OutOfOrderTableProxy, InlineTable)):
+        if isinstance(pdeps, _TABLE_LIKE_TYPES):
             found.append(("[tool.poetry.dependencies]", list(pdeps.keys())))
         # Pre-1.2 Poetry expressed dev deps as ``[tool.poetry.dev-dependencies]``.
         # Poetry 1.2+ moved them under ``[tool.poetry.group.dev.dependencies]``
         # but the legacy section is still produced by older `poetry add`
         # invocations and still on countless deployed pyprojects.
         pdev = poetry.get("dev-dependencies")
-        if isinstance(pdev, (Table, OutOfOrderTableProxy, InlineTable)):
+        if isinstance(pdev, _TABLE_LIKE_TYPES):
             found.append(("[tool.poetry.dev-dependencies]", list(pdev.keys())))
         pgroups = poetry.get("group")
-        if isinstance(pgroups, (Table, OutOfOrderTableProxy, InlineTable)):
+        if isinstance(pgroups, _TABLE_LIKE_TYPES):
             for gname, gtable in pgroups.items():
-                if not isinstance(gtable, (Table, OutOfOrderTableProxy, InlineTable)):
+                if not isinstance(gtable, _TABLE_LIKE_TYPES):
                     continue
                 gdeps = gtable.get("dependencies")
-                if isinstance(gdeps, (Table, OutOfOrderTableProxy, InlineTable)):
+                if isinstance(gdeps, _TABLE_LIKE_TYPES):
                     found.append(
                         (
                             f"[tool.poetry.group.{gname}.dependencies]",
@@ -749,17 +756,17 @@ def _iter_dep_lists(doc: TOMLDocument) -> list[tuple[str, Any]]:
                     )
 
     pdm = tool.get("pdm")
-    if isinstance(pdm, (Table, OutOfOrderTableProxy, InlineTable)):
+    if isinstance(pdm, _TABLE_LIKE_TYPES):
         # PDM ``[tool.pdm.dev-dependencies]`` is ``Mapping[group → list[str]]``,
         # same shape as PEP 735 ``[dependency-groups]``.
         pdm_dev = pdm.get("dev-dependencies")
-        if isinstance(pdm_dev, (Table, OutOfOrderTableProxy, InlineTable)):
+        if isinstance(pdm_dev, _TABLE_LIKE_TYPES):
             for gname, gdeps in pdm_dev.items():
                 if isinstance(gdeps, list):
                     found.append((f"[tool.pdm.dev-dependencies].{gname}", gdeps))
 
     hatch = tool.get("hatch")
-    if isinstance(hatch, (Table, OutOfOrderTableProxy, InlineTable)):
+    if isinstance(hatch, _TABLE_LIKE_TYPES):
         # Hatch envs (``[tool.hatch.envs.<env>]``) carry per-environment
         # dependency lists. Two surfaces are common in real projects:
         # ``dependencies`` / ``extra-dependencies`` as PEP 508 lists,
@@ -768,15 +775,15 @@ def _iter_dep_lists(doc: TOMLDocument) -> list[tuple[str, Any]]:
         # Both must be checked so a Hatch user with torch declared
         # doesn't trigger the "not a direct dep" warning.
         envs = hatch.get("envs")
-        if isinstance(envs, (Table, OutOfOrderTableProxy, InlineTable)):
+        if isinstance(envs, _TABLE_LIKE_TYPES):
             for ename, etable in envs.items():
-                if not isinstance(etable, (Table, OutOfOrderTableProxy, InlineTable)):
+                if not isinstance(etable, _TABLE_LIKE_TYPES):
                     continue
                 for key in ("dependencies", "extra-dependencies"):
                     edeps = etable.get(key)
                     if isinstance(edeps, list):
                         found.append((f"[tool.hatch.envs.{ename}].{key}", edeps))
-                    elif isinstance(edeps, (Table, OutOfOrderTableProxy, InlineTable)):
+                    elif isinstance(edeps, _TABLE_LIKE_TYPES):
                         found.append(
                             (
                                 f"[tool.hatch.envs.{ename}.{key}]",
@@ -861,10 +868,10 @@ def _get_or_create_tool_uv(doc: TOMLDocument) -> TableLike:
     are interleaved with unrelated sections.
     """
     tool = doc.setdefault("tool", tomlkit.table())
-    if not isinstance(tool, (Table, OutOfOrderTableProxy)):
+    if not isinstance(tool, _TABLE_LIKE_TYPES):
         raise TypeError("pyproject.toml [tool] is not a table")
     uv = tool.setdefault("uv", tomlkit.table())
-    if not isinstance(uv, (Table, OutOfOrderTableProxy)):
+    if not isinstance(uv, _TABLE_LIKE_TYPES):
         raise TypeError("pyproject.toml [tool.uv] is not a table")
     return uv
 
@@ -911,7 +918,7 @@ def _ensure_torch_source(doc: TOMLDocument) -> None:
     """
     uv = _get_or_create_tool_uv(doc)
     sources = uv.setdefault("sources", tomlkit.table())
-    if not isinstance(sources, (Table, OutOfOrderTableProxy, InlineTable)):
+    if not isinstance(sources, _TABLE_LIKE_TYPES):
         raise TypeError("pyproject.toml [tool.uv.sources] is not a table")
 
     inline = tomlkit.inline_table()
@@ -1005,7 +1012,7 @@ def _drop_torch_source(doc: TOMLDocument) -> None:
     # the ``sources = { torch = [...] }`` inline form symmetric with
     # :func:`_torch_sources` so remove honours every detect-classified
     # CANONICAL shape.
-    if isinstance(sources, (Table, OutOfOrderTableProxy, InlineTable)):
+    if isinstance(sources, _TABLE_LIKE_TYPES):
         torch_entry = sources.get("torch")
         if torch_entry is not None:
             if isinstance(torch_entry, InlineTable | dict) and not isinstance(
@@ -1043,7 +1050,7 @@ def _drop_torch_source(doc: TOMLDocument) -> None:
     uv = _tool_uv(doc)
     if uv is not None and not uv:
         tool = doc.get("tool")
-        if isinstance(tool, (Table, OutOfOrderTableProxy)):
+        if isinstance(tool, _TABLE_LIKE_TYPES):
             del tool["uv"]
             if not tool:
                 del doc["tool"]
