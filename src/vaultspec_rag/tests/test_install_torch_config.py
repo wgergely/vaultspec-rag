@@ -497,6 +497,36 @@ class TestInstallTorchConfigFollowups:
         # Warning names the exception type so the user knows where to look.
         assert any("RuntimeError" in w for w in report.warnings)
 
+    def test_install_confirm_click_abort_caused_by_eof_reports_skipped_eof(
+        self, consumer_workspace: Path
+    ) -> None:
+        """BEHAV-02 regression: Rich's ``Confirm.ask`` on Windows
+        re-raises a stdin EOF as ``click.Abort`` rather than the bare
+        ``EOFError`` other platforms see. The install handler must walk
+        the exception chain and route those to ``SKIPPED_EOF`` so the
+        user sees the bypass-flag hint, not a generic decline label.
+        """
+        import click
+
+        def windows_eof_confirm(_prompt: str) -> bool:
+            try:
+                raise EOFError("EOF when reading a line")
+            except EOFError as eof_exc:
+                raise click.exceptions.Abort from eof_exc
+
+        report = install_run(
+            path=consumer_workspace,
+            assume_yes=False,
+            confirm=windows_eof_confirm,
+        )
+        assert report.torch_config_action == "skipped-eof", (
+            report.torch_config_action,
+            report.warnings,
+        )
+        # Warning is the EOF-shaped one, not the generic "Abort raised".
+        assert any("non-interactive stdin" in w for w in report.warnings)
+        assert any("--yes" in w or "--force" in w for w in report.warnings)
+
     def test_install_transitive_warning_fires_on_idempotent_rerun(
         self, consumer_workspace: Path
     ) -> None:

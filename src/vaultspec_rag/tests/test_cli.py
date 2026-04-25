@@ -20,6 +20,7 @@ from vaultspec_rag.cli import (
     app,
 )
 from vaultspec_rag.config import EnvVar
+from vaultspec_rag.torch_config import TorchConfigAction
 
 pytestmark = [pytest.mark.unit]
 
@@ -494,7 +495,7 @@ class TestRenderInstallReport:
         report = InstallReport(
             action="install",
             target=Path("."),
-            torch_config_action="applied",
+            torch_config_action=TorchConfigAction.APPLIED,
             warnings=[warning],
         )
         out = self._render(report)
@@ -513,7 +514,7 @@ class TestRenderInstallReport:
         report = InstallReport(
             action="install",
             target=Path("."),
-            torch_config_action="applied",
+            torch_config_action=TorchConfigAction.APPLIED,
             warnings=[
                 "uv sync --reinstall-package torch exited with code 1; "
                 "last stderr lines:\n"
@@ -536,7 +537,7 @@ class TestRenderInstallReport:
         report = InstallReport(
             action="install",
             target=Path("."),
-            torch_config_action="conflict",
+            torch_config_action=TorchConfigAction.CONFLICT,
             torch_config_conflicts=[
                 '[[tool.uv.index]] entry name="pytorch-cu130" url-mismatch'
             ],
@@ -555,7 +556,7 @@ class TestRenderInstallReport:
         report = InstallReport(
             action="install",
             target=Path("."),
-            torch_config_action="skipped-eof",
+            torch_config_action=TorchConfigAction.SKIPPED_EOF,
         )
         out = self._render(report)
         # Action token survives.
@@ -607,7 +608,108 @@ class TestRenderUninstallReport:
         report = UninstallReport(
             action="uninstall",
             target=Path("."),
-            torch_config_action="error",
+            torch_config_action=TorchConfigAction.ERROR,
         )
         out = self._render(report)
         assert "error" in out
+
+
+class TestInstallExitCodes:
+    """CLI3-01 regression: install exits non-zero on the torch-config
+    terminal states the user did not opt into. Issue #83 finding 3
+    "Bonus" item.
+    """
+
+    @staticmethod
+    def _make_pyproject(tmp_path: Path, body: str) -> Path:
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        (ws / "pyproject.toml").write_text(body, encoding="utf-8", newline="")
+        return ws
+
+    def test_install_exit_zero_on_applied(self, tmp_path: Path) -> None:
+        ws = self._make_pyproject(
+            tmp_path,
+            '[project]\nname = "demo"\nversion = "0.1.0"\n'
+            'dependencies = ["vaultspec-rag", "torch>=2.4"]\n',
+        )
+        result = runner.invoke(app, ["install", "--target", str(ws), "--yes"])
+        assert result.exit_code == 0, result.output
+
+    def test_install_exit_nonzero_on_skipped_non_tty(self, tmp_path: Path) -> None:
+        """Non-TTY without ``--yes`` / ``--force``: torch-config skipped,
+        exit code 2 so CI fails loudly.
+        """
+        ws = self._make_pyproject(
+            tmp_path,
+            '[project]\nname = "demo"\nversion = "0.1.0"\n'
+            'dependencies = ["vaultspec-rag"]\n',
+        )
+        # CliRunner's stdin is not a TTY, so confirm_fn=None — emulates
+        # the non-interactive harness path.
+        result = runner.invoke(app, ["install", "--target", str(ws)])
+        assert result.exit_code == 2, result.output
+
+    def test_install_exit_nonzero_on_error(self, tmp_path: Path) -> None:
+        """Corrupt pyproject → torch_config_action=TorchConfigAction.ERROR → exit 2."""
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        (ws / "pyproject.toml").write_text(
+            "[project\nname = ", encoding="utf-8"
+        )  # malformed
+        result = runner.invoke(app, ["install", "--target", str(ws), "--yes"])
+        assert result.exit_code == 2, result.output
+
+    def test_install_exit_zero_on_conflict(self, tmp_path: Path) -> None:
+        """CUSTOMISED block — user-state, not a runtime failure.
+        Conflict exits 0; the warning is the signal, not the exit code.
+        """
+        ws = self._make_pyproject(
+            tmp_path,
+            '[project]\nname = "demo"\nversion = "0.1.0"\n'
+            'dependencies = ["vaultspec-rag"]\n'
+            "\n[[tool.uv.index]]\n"
+            'name = "pytorch-cu130"\n'
+            'url = "https://download.pytorch.org/whl/cu121"\n'  # wrong url
+            "explicit = true\n",
+        )
+        result = runner.invoke(app, ["install", "--target", str(ws), "--yes"])
+        assert result.exit_code == 0, result.output
+
+    def test_install_exit_zero_when_no_torch_config(self, tmp_path: Path) -> None:
+        """``--no-torch-config`` opts out — exits 0 even on a non-TTY."""
+        ws = self._make_pyproject(
+            tmp_path,
+            '[project]\nname = "demo"\nversion = "0.1.0"\n'
+            'dependencies = ["vaultspec-rag"]\n',
+        )
+        result = runner.invoke(
+            app, ["install", "--target", str(ws), "--no-torch-config"]
+        )
+        assert result.exit_code == 0, result.output
+
+
+class TestInstallTargetValidation:
+    """CLI3-02 regression: per-command ``--target`` must reject
+    regular files (matching the global ``--target`` validator).
+    """
+
+    def test_per_command_target_rejects_file(self, tmp_path: Path) -> None:
+        """Pointing ``install --target`` at a regular file used to slip
+        past validation; now correctly rejected by typer's
+        ``file_okay=False``.
+        """
+        f = tmp_path / "not-a-dir.txt"
+        f.write_text("hi", encoding="utf-8")
+        result = runner.invoke(app, ["install", "--target", str(f)])
+        assert result.exit_code != 0, result.output
+        assert "is a file" in result.output or "directory" in result.output.lower()
+
+    def test_per_command_target_accepts_dir(self, tmp_path: Path) -> None:
+        """Negative pair: a real directory still validates."""
+        d = tmp_path / "real-dir"
+        d.mkdir()
+        result = runner.invoke(
+            app, ["install", "--target", str(d), "--no-torch-config"]
+        )
+        assert result.exit_code == 0, result.output

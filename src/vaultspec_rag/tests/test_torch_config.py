@@ -824,6 +824,65 @@ def test_apply_lf_file_stays_lf(tmp_path: Path) -> None:
     assert b"\r\n" not in raw, raw
 
 
+def test_apply_remove_round_trip_byte_equal(tmp_path: Path) -> None:
+    """BEHAV-01 regression: the ADR's symmetric-mirror promise
+    requires apply → remove to leave the file *byte-identical* to its
+    pre-apply content. Prior to the trailing-newline preservation in
+    ``_match_trailing_newline`` the round-trip appended a stray LF.
+    """
+    p = tmp_path / "pyproject.toml"
+    body = (
+        b"[project]\n"
+        b'name = "rt"\n'
+        b'version = "0.0.1"\n'
+        b'requires-python = ">=3.13"\n'
+        b'dependencies = ["torch>=2.4"]\n'
+    )
+    p.write_bytes(body)
+    sha_before = hashlib.sha256(p.read_bytes()).hexdigest()
+    tc.apply_patch(p)
+    tc.remove_patch(p)
+    sha_after = hashlib.sha256(p.read_bytes()).hexdigest()
+    assert sha_after == sha_before, (
+        f"round-trip not byte-equal: before={sha_before}, after={sha_after}; "
+        f"diff={p.read_bytes()[len(body) :]!r}"
+    )
+
+
+def test_apply_remove_round_trip_byte_equal_no_trailing_newline(
+    tmp_path: Path,
+) -> None:
+    """A pyproject without a final LF (less common but legal) must
+    also round-trip byte-equal. Pins the second branch of
+    ``_match_trailing_newline`` (zero trailing newlines).
+    """
+    p = tmp_path / "pyproject.toml"
+    # No trailing newline.
+    body = b'[project]\nname = "rt"\nversion = "0.0.1"\n'
+    p.write_bytes(body.rstrip(b"\n"))
+    sha_before = hashlib.sha256(p.read_bytes()).hexdigest()
+    tc.apply_patch(p)
+    tc.remove_patch(p)
+    sha_after = hashlib.sha256(p.read_bytes()).hexdigest()
+    assert sha_after == sha_before
+
+
+def test_apply_remove_round_trip_byte_equal_double_trailing_newline(
+    tmp_path: Path,
+) -> None:
+    """Some POSIX projects end pyproject.toml with two trailing LFs
+    (file ends with a blank line). Round-trip must preserve that.
+    """
+    p = tmp_path / "pyproject.toml"
+    body = b'[project]\nname = "rt"\nversion = "0.0.1"\n\n'
+    p.write_bytes(body)
+    sha_before = hashlib.sha256(p.read_bytes()).hexdigest()
+    tc.apply_patch(p)
+    tc.remove_patch(p)
+    sha_after = hashlib.sha256(p.read_bytes()).hexdigest()
+    assert sha_after == sha_before
+
+
 def test_has_direct_torch_dep_in_poetry_dependencies(tmp_path: Path) -> None:
     """REAL-03: Poetry's ``[tool.poetry.dependencies]`` is
     ``Mapping[name → spec]``, not a list. The detector must see

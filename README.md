@@ -32,6 +32,8 @@ uv run vaultspec-rag install
 
 The first command pulls in vaultspec-core and all GPU dependencies. The second seeds vaultspec-rag's bundled rule/MCP files into the workspace **and** patches your `pyproject.toml` with the cu130 torch index so `uv` resolves the CUDA torch wheel on Linux and Windows (macOS is left on PyPI torch). You'll be prompted before the `pyproject.toml` edit; pass `--yes` to skip the prompt (required in non-TTY contexts) or `--no-torch-config` to opt out. Add `--sync` to run `uv sync --reinstall-package torch` automatically after the patch.
 
+Flag precedence: `--no-torch-config` always wins (the patch is not applied regardless of `--force` / `--yes`). `--force` is the user's blanket opt-in — it implies `--yes` for the torch-config prompt. On a non-TTY without `--yes` or `--force`, the patch is skipped with a warning and the command exits non-zero (code 2) so CI fails loudly. The default for the interactive prompt is **no**: hitting Enter without typing declines.
+
 After `install`, run `vaultspec-rag --version` and then `vaultspec-rag index` as usual.
 
 #### Manual cu130 configuration

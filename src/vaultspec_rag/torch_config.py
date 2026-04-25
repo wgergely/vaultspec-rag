@@ -61,6 +61,7 @@ __all__ = [
     "CU130_INDEX_URL",
     "CU130_MARKER",
     "PatchReport",
+    "TorchConfigAction",
     "TorchConfigState",
     "TorchDiagnosis",
     "apply_patch",
@@ -96,21 +97,66 @@ class TorchDiagnosis(StrEnum):
     WORKING = "working"
 
 
+class TorchConfigAction(StrEnum):
+    """Closed set of action strings emitted on the install / uninstall
+    report's ``torch_config_action`` field.
+
+    The set was historically an open string surface; round-2 audit
+    surfaced a JSON-contract gap (the ADR documented 5 values but the
+    code emitted 13). Pinning the vocabulary to a ``StrEnum`` makes
+    the contract self-documenting and lets static type-checkers catch
+    typos. ``StrEnum`` members compare equal to their string value,
+    so existing consumers that filter on ``"applied"`` keep working.
+
+    Values:
+        APPLIED: cu130 block was just written.
+        ALREADY: pyproject is already canonical; nothing to write.
+        CONFLICT: a non-canonical cu130 block exists; refused to mutate.
+        ABSENT: no pyproject.toml at the target.
+        REMOVED: cu130 block was just removed (uninstall side only).
+        DISABLED: ``configure_torch=False`` opted out.
+        DRY_RUN: dry-run preview, no write.
+        DECLINED: user declined the prompt (or a custom confirm hook
+            raised an exception we converted to a decline).
+        SKIPPED: torch-config step did nothing this run; the report
+            field's default before the orchestrator updates it.
+        SKIPPED_NON_TTY: non-interactive caller without a confirm hook.
+        SKIPPED_EOF: confirmation prompt hit end-of-stream (CI / pipe).
+        ERROR: parse or write failure during inspect / patch.
+    """
+
+    APPLIED = "applied"
+    ALREADY = "already"
+    CONFLICT = "conflict"
+    ABSENT = "absent"
+    REMOVED = "removed"
+    DISABLED = "disabled"
+    DRY_RUN = "dry_run"
+    DECLINED = "declined"
+    SKIPPED = "skipped"
+    SKIPPED_NON_TTY = "skipped-non-tty"
+    SKIPPED_EOF = "skipped-eof"
+    ERROR = "error"
+
+
 @dataclass
 class PatchReport:
     """Structured outcome of an apply / remove pass.
 
     Attributes:
-        action: One of ``"applied"``, ``"skipped"``, ``"conflict"``,
-            ``"absent"``, ``"already"``, ``"removed"``.
+        action: A :class:`TorchConfigAction` member describing the
+            outcome (``APPLIED``, ``ALREADY``, ``CONFLICT``,
+            ``ABSENT``, ``REMOVED``, or ``SKIPPED`` as the default).
+            Subclasses ``str``, so legacy consumers comparing with
+            string literals (``action == "applied"``) keep working.
         path: The pyproject.toml inspected.
         conflicts: Human-readable descriptions of conflicting keys
-            when ``action == "conflict"``.
+            when ``action == TorchConfigAction.CONFLICT``.
         preview: The TOML snippet that would be (or was) written,
             for dry-run / display purposes.
     """
 
-    action: str
+    action: TorchConfigAction
     path: Path
     conflicts: list[str] = field(default_factory=list)
     preview: str = ""
@@ -461,23 +507,24 @@ def apply_patch(pyproject: Path) -> PatchReport:
     Preserves all user comments, key ordering, and whitespace in the
     rest of the document via tomlkit's round-trip semantics.
     """
-    report = PatchReport(action="skipped", path=pyproject)
+    report = PatchReport(action=TorchConfigAction.SKIPPED, path=pyproject)
     doc = _load(pyproject)
     if doc is None:
-        report.action = "absent"
+        report.action = TorchConfigAction.ABSENT
         return report
 
     state, conflicts = _classify(doc)
     if state == TorchConfigState.CANONICAL:
-        report.action = "already"
+        report.action = TorchConfigAction.ALREADY
         return report
     if state == TorchConfigState.CUSTOMISED:
-        report.action = "conflict"
+        report.action = TorchConfigAction.CONFLICT
         report.conflicts = conflicts
         return report
 
     # MISSING → write.
     uses_crlf = _detect_crlf(pyproject)
+    original_bytes = pyproject.read_bytes()
     _ensure_tool_uv_index(doc)
     _ensure_torch_source(doc)
     new_text = tomlkit.dumps(doc)
@@ -488,8 +535,13 @@ def apply_patch(pyproject: Path) -> PatchReport:
         # diff stays minimal. tomlkit's parser accepts both endings,
         # so the validation reparse above still applies.
         new_text = new_text.replace("\n", "\r\n")
+    # Preserve the file's original trailing-newline shape so both
+    # apply and remove are EOF-neutral. Necessary for the ADR's
+    # symmetric-mirror byte-equality promise (apply→remove leaves the
+    # file byte-identical to the pre-apply content). BEHAV-01.
+    new_text = _match_trailing_newline(original_bytes, new_text, uses_crlf=uses_crlf)
     atomic_write(pyproject, new_text)
-    report.action = "applied"
+    report.action = TorchConfigAction.APPLIED
     report.preview = manual_snippet()
     return report
 
@@ -507,32 +559,73 @@ def remove_patch(pyproject: Path) -> PatchReport:
     After removal, the file should reparse as valid TOML and all
     user-owned content outside the cu130 block is preserved.
     """
-    report = PatchReport(action="skipped", path=pyproject)
+    report = PatchReport(action=TorchConfigAction.SKIPPED, path=pyproject)
     doc = _load(pyproject)
     if doc is None:
-        report.action = "absent"
+        report.action = TorchConfigAction.ABSENT
         return report
 
     state, conflicts = _classify(doc)
     if state == TorchConfigState.MISSING:
-        report.action = "absent"
+        report.action = TorchConfigAction.ABSENT
         return report
     if state == TorchConfigState.CUSTOMISED:
-        report.action = "skipped"
+        report.action = TorchConfigAction.SKIPPED
         report.conflicts = conflicts
         return report
 
-    # CANONICAL → remove.
+    # CANONICAL → remove. Capture the trailing-newline shape pre-read
+    # so the symmetric-mirror promise (apply→remove leaves the file
+    # byte-identical to the pre-apply content) holds — tomlkit's
+    # ``dumps`` always emits a single trailing LF, which can append
+    # one extra byte if the original ended without one. BEHAV-01.
     uses_crlf = _detect_crlf(pyproject)
+    original_bytes = pyproject.read_bytes()
     _drop_cu130_index(doc)
     _drop_torch_source(doc)
     new_text = tomlkit.dumps(doc)
     tomlkit.parse(new_text)
     if uses_crlf:
         new_text = new_text.replace("\n", "\r\n")
+    new_text = _match_trailing_newline(original_bytes, new_text, uses_crlf=uses_crlf)
     atomic_write(pyproject, new_text)
-    report.action = "removed"
+    report.action = TorchConfigAction.REMOVED
     return report
+
+
+def _match_trailing_newline(
+    original_bytes: bytes, new_text: str, *, uses_crlf: bool
+) -> str:
+    """Restore the original file's trailing-newline shape on ``new_text``.
+
+    tomlkit's ``dumps`` always emits exactly one trailing LF.
+    Real-world pyproject files vary: some end with LF, some with two
+    LFs (POSIX convention with a blank final line), some with no
+    trailing newline at all. Without this normalisation, ``apply →
+    remove`` would silently shift the file's terminator shape,
+    breaking the ADR's "symmetric mirror — leaves the file byte-
+    identical to its pre-apply content" promise.
+    """
+    eol = "\r\n" if uses_crlf else "\n"
+    eol_bytes = b"\r\n" if uses_crlf else b"\n"
+
+    # Count the trailing-newline run on the original (in the chosen
+    # eol). Compare with the trailing-newline run on tomlkit's output.
+    def _count_trailing(buf: bytes, sep: bytes) -> int:
+        n = 0
+        while buf.endswith(sep):
+            n += 1
+            buf = buf[: -len(sep)]
+        return n
+
+    original_trail = _count_trailing(original_bytes, eol_bytes)
+    new_bytes = new_text.encode("utf-8")
+    current_trail = _count_trailing(new_bytes, eol_bytes)
+    if current_trail == original_trail:
+        return new_text
+    # Strip whatever tomlkit emitted, then append the original count.
+    stripped = new_text.rstrip("\r\n")
+    return stripped + eol * original_trail
 
 
 def _is_torch_requirement(req: object) -> bool:
