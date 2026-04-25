@@ -625,18 +625,23 @@ def test_has_direct_torch_dep_no_project_file(tmp_path: Path) -> None:
         ("torch == 2.11.0+cu130", True),
         ("torch ; sys_platform == 'linux'", True),
         ("torch @ https://download.pytorch.org/whl/cu130/torch-2.11.0.whl", True),
-        ("Torch", True),  # case insensitive normalisation
+        ("torch (>=2.4)", True),  # PEP 508 parenthesised version specifier
+        ("Torch", True),  # PEP 503 case-insensitive normalisation
+        ("TORCH>=2.4", True),
         ("torchvision", False),  # prefix match must not fire
         ("torchaudio>=1.0", False),
         ("requests", False),
         ("numpy>=2.0", False),
         ("", False),
+        ("not a valid PEP 508 string @!", False),  # InvalidRequirement → False
     ],
 )
 def test_is_torch_requirement_predicate(entry: str, expected: bool) -> None:
-    """The PEP 508 strip predicate underpins ``has_direct_torch_dep``.
-    Each case fixes one parsing trap (extras, markers, URL form,
-    case sensitivity, prefix collisions like ``torchvision``).
+    """``has_direct_torch_dep`` delegates name extraction to
+    :class:`packaging.requirements.Requirement`. Each case pins one
+    parsing trap (extras, markers, URL form, parentheses,
+    case-insensitive PEP 503 normalisation, prefix collisions like
+    ``torchvision``, malformed input).
     """
     # Access the private helper directly; behaviour is part of the
     # module's contract because ``has_direct_torch_dep`` delegates.

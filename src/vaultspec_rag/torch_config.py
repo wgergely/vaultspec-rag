@@ -27,6 +27,8 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Final
 
 import tomlkit
+from packaging.requirements import InvalidRequirement, Requirement
+from packaging.utils import canonicalize_name
 from tomlkit import TOMLDocument
 from tomlkit.container import OutOfOrderTableProxy
 from tomlkit.items import AoT, InlineTable, Table
@@ -536,28 +538,34 @@ def remove_patch(pyproject: Path) -> PatchReport:
 def _is_torch_requirement(req: object) -> bool:
     """Return True if ``req`` (a PEP 508 entry) names ``torch``.
 
-    Strips extras (``torch[extra]``), version specifiers
-    (``torch>=2.4``), URL form (``torch @ https://...``), and any
-    surrounding whitespace before the comparison. Returns False for
-    anything that is not a string — comments, dict-form entries,
-    accidentally-typed integers — to keep the predicate total.
+    Delegates name extraction to :class:`packaging.requirements.Requirement`,
+    which is the spec-compliant PEP 508 parser used throughout the
+    Python packaging stack (pip / uv / hatch / poetry-core all share
+    it). The parser handles extras (``torch[extra]``), version
+    specifiers (``torch>=2.4``, ``torch (>=2.4)``), URL form
+    (``torch @ https://...``), and PEP 508 markers
+    (``torch ; sys_platform == 'linux'``) without the manual
+    boundary-splitting that earlier versions of this predicate used.
+
+    Names are compared after :func:`packaging.utils.canonicalize_name`
+    so PEP 503/PEP 508 normalisation rules apply: case, ``-`` / ``_``
+    / ``.`` separators all collapse to a single canonical form.
+
+    Non-string inputs return False (tomlkit can yield dict-form
+    entries, integers, comments — the predicate must stay total).
+    Inputs that are syntactically invalid PEP 508 also return False
+    rather than raising.
     """
     if not isinstance(req, str):
         return False
-    name = req.strip()
-    # Cut at the first PEP 508 separator. Order matters: ``@`` may
-    # appear in a URL but never before whitespace in a name; the
-    # ``min(...)`` collapses whichever boundary comes first. ``(``
-    # closes a PEP 508 name when the version specifier is wrapped
-    # in parentheses (``torch (>=2.4)`` — legal under PEP 508 grammar
-    # though uncommon in pyproject sources).
-    boundaries = [
-        name.find(c) for c in (" ", "[", "(", "<", ">", "=", "!", "~", "@", ";")
-    ]
-    cuts = [i for i in boundaries if i != -1]
-    if cuts:
-        name = name[: min(cuts)]
-    return name.strip().lower() == "torch"
+    text = req.strip()
+    if not text:
+        return False
+    try:
+        parsed = Requirement(text)
+    except InvalidRequirement:
+        return False
+    return canonicalize_name(parsed.name) == "torch"
 
 
 def _iter_dep_lists(doc: TOMLDocument) -> list[tuple[str, Any]]:
