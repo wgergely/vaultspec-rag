@@ -55,6 +55,40 @@ from .workspace import WorkspaceError, WorkspaceLayout, resolve_workspace  # noq
 console = Console(legacy_windows=False)
 
 
+def _cpu_only_message() -> str:
+    """Return the CPU_ONLY remediation copy as a Rich-markup string.
+
+    Extracted so the rendered output is testable without monkey-patching
+    :func:`_handle_gpu_error`. ``markup=True`` makes Rich parse
+    ``[name]...[/name]`` as markup, so every literal ``[`` in TOML keys
+    must be backslash-escaped (``\\[``). Closing ``]`` outside a tag
+    context is already literal and must NOT be escaped — Rich passes
+    ``\\]`` through verbatim and leaves a stray backslash in the
+    rendered output.
+    """
+    return (
+        "[bold red]Error:[/] PyTorch was installed without CUDA support "
+        "(CPU-only wheel). Your GPU is fine.\n\n"
+        "  [cyan]uv run vaultspec-rag install[/] patches your "
+        "pyproject.toml with the cu130 torch index. After patching, "
+        "rerun [cyan]uv sync --reinstall-package torch[/].\n\n"
+        "  If install has already run and you are still here, verify:\n"
+        "    1. [cyan]pyproject.toml[/] has \\[\\[tool.uv.index]] "
+        '[cyan]name = "pytorch-cu130"[/] and '
+        "[cyan]\\[tool.uv.sources][/] torch = ...\n"
+        "    2. [cyan]uv.lock[/] has a torch entry with "
+        "[cyan]source = "
+        '{ registry = "https://download.pytorch.org/whl/cu130" }[/] '
+        "(not pypi.org/simple)\n"
+        "    3. If the lockfile still points at PyPI, [cyan]torch[/] must be "
+        "a direct dependency. Add [cyan]torch>=2.4[/] to "
+        "[cyan]\\[project].dependencies[/] or "
+        "[cyan]\\[dependency-groups].dev[/], "
+        "then run [cyan]uv lock --refresh-package torch && uv sync[/].\n\n"
+        "  Or configure manually by adding this to your pyproject.toml:"
+    )
+
+
 def _handle_gpu_error(exc: Exception) -> None:
     """Print an actionable message for torch / CUDA failures and exit.
 
@@ -93,27 +127,7 @@ def _handle_gpu_error(exc: Exception) -> None:
             "configures the cu130 torch index and installs the GPU build.",
         )
     elif diagnosis == TorchDiagnosis.CPU_ONLY:
-        console.print(
-            "[bold red]Error:[/] PyTorch was installed without CUDA support "
-            "(CPU-only wheel). Your GPU is fine.\n\n"
-            "  [cyan]uv run vaultspec-rag install[/] patches your "
-            "pyproject.toml with the cu130 torch index. After patching, "
-            "rerun [cyan]uv sync --reinstall-package torch[/].\n\n"
-            "  If install has already run and you are still here, verify:\n"
-            "    1. [cyan]pyproject.toml[/] has [[tool.uv.index]] "
-            '[cyan]name = "pytorch-cu130"[/] and '
-            "[cyan][tool.uv.sources] torch = ...[/]\n"
-            "    2. [cyan]uv.lock[/] has a torch entry with "
-            "[cyan]source = "
-            '{ registry = "https://download.pytorch.org/whl/cu130" }[/] '
-            "(not pypi.org/simple)\n"
-            "    3. If the lockfile still points at PyPI, [cyan]torch[/] must be "
-            "a direct dependency. Add [cyan]torch>=2.4[/] to "
-            "[cyan][project].dependencies[/] or [cyan][dependency-groups].dev[/], "
-            "then run [cyan]uv lock --refresh-package torch && uv sync[/].\n\n"
-            "  Or configure manually by adding this to your pyproject.toml:",
-            markup=True,
-        )
+        console.print(_cpu_only_message(), markup=True)
         # Rich interprets ``[[tool.uv.index]]`` as markup; emit the
         # snippet with markup disabled so brackets render verbatim.
         console.print(manual_snippet(), markup=False, highlight=False)

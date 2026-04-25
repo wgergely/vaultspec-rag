@@ -401,3 +401,53 @@ class TestServiceProjectsCli:
             ],
         )
         assert result.exit_code == 3
+
+
+class TestCpuOnlyMessageRendering:
+    """Regression guard for Rich-markup escaping in the CPU_ONLY copy.
+
+    The CPU_ONLY remediation message uses ``markup=True`` to colourise
+    hints and embeds literal TOML keys (``[[tool.uv.index]]``,
+    ``[tool.uv.sources]``, ``[project].dependencies``,
+    ``[dependency-groups].dev``). Each opening ``[`` must be
+    backslash-escaped so Rich does not parse the TOML keys as markup
+    tags. This test renders the actual message via Rich and asserts the
+    user-visible bytes — without it, a future copy edit can silently
+    break the snippet shown to a user already looking at the wrong
+    wheel.
+    """
+
+    @staticmethod
+    def _render() -> str:
+        import io
+
+        from rich.console import Console
+
+        from vaultspec_rag.cli import _cpu_only_message
+
+        buf = io.StringIO()
+        Console(file=buf, force_terminal=False, color_system=None, width=120).print(
+            _cpu_only_message(), markup=True
+        )
+        return buf.getvalue()
+
+    def test_renders_double_brackets_for_aot(self) -> None:
+        out = self._render()
+        assert "[[tool.uv.index]]" in out, out
+
+    def test_renders_single_brackets_for_section(self) -> None:
+        out = self._render()
+        assert "[tool.uv.sources]" in out, out
+
+    def test_renders_project_and_groups_keys(self) -> None:
+        out = self._render()
+        assert "[project].dependencies" in out, out
+        assert "[dependency-groups].dev" in out, out
+
+    def test_no_stray_backslashes_in_rendered_output(self) -> None:
+        """Rich passes ``\\]`` through verbatim — only ``[`` is escapable.
+        A stray backslash in the rendered text means a future edit
+        overcorrected and put ``\\]`` somewhere it should not be.
+        """
+        out = self._render()
+        assert "\\" not in out, out
