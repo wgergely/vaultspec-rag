@@ -403,18 +403,29 @@ def test_close_all_drains_busy_slots(tmp_path: Path) -> None:
             def _hammer(proj: Path) -> None:
                 with contextlib.suppress(Exception):
                     _run(
-                        _call_tool(
-                            port,
-                            "search_vault",
-                            {
-                                "query": "drain test",
-                                "top_k": 3,
-                                "project_root": str(proj),
-                            },
+                        asyncio.wait_for(
+                            _call_tool(
+                                port,
+                                "search_vault",
+                                {
+                                    "query": "drain test",
+                                    "top_k": 3,
+                                    "project_root": str(proj),
+                                },
+                            ),
+                            timeout=8.0,
                         ),
                     )
 
-            threads = [threading.Thread(target=_hammer, args=(p,)) for p in projects]
+            threads = [
+                threading.Thread(
+                    target=_hammer,
+                    args=(p,),
+                    daemon=True,
+                    name=f"drain-hammer-{i}",
+                )
+                for i, p in enumerate(projects)
+            ]
             for t in threads:
                 t.start()
             # Immediately request termination.
@@ -425,7 +436,9 @@ def test_close_all_drains_busy_slots(tmp_path: Path) -> None:
             # 5s drain + 2s grace + teardown epsilon.
             assert elapsed < 10.0, f"shutdown took {elapsed:.1f}s"
             for t in threads:
-                t.join(timeout=5)
+                t.join(timeout=10)
+            alive = [t.name for t in threads if t.is_alive()]
+            assert not alive, f"client load threads did not exit: {alive}"
             # service.json must be cleaned up.
             assert not (tmp_path / "service.json").exists()
         finally:
