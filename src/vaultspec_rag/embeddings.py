@@ -241,7 +241,7 @@ class EmbeddingModel:
             processor_kwargs={"padding_side": "left"},
         )
         # Cap the model's advertised max sequence length so the
-        # tokenizer truncates aggressively and the model never
+        # processor truncates aggressively and the model never
         # allocates attention buffers for the 32 k context window.
         # ``max_embed_chars=8000`` truncates raw text to ~2000 BPE
         # tokens for Qwen3, so 2048 is the right ceiling. #68
