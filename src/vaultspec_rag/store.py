@@ -349,37 +349,36 @@ class VaultStore:
 
         from qdrant_client import models
 
+        points = []
+        for doc in docs:
+            vector: dict = {
+                "dense": doc.vector,
+            }
+            if doc.sparse_indices:
+                vector["sparse"] = models.SparseVector(
+                    indices=doc.sparse_indices,
+                    values=doc.sparse_values,
+                )
+            points.append(
+                models.PointStruct(
+                    id=self._stable_id(doc.id),
+                    vector=vector,
+                    payload={
+                        "doc_id": doc.id,
+                        "path": doc.path,
+                        "doc_type": doc.doc_type,
+                        "feature": doc.feature,
+                        "date": doc.date,
+                        "tags": doc.tags,
+                        "related": doc.related,
+                        "title": doc.title,
+                        "content": doc.content,
+                    },
+                ),
+            )
+
         with self._client_lock:
             self.ensure_table()
-
-            points = []
-            for doc in docs:
-                vector: dict = {
-                    "dense": doc.vector,
-                }
-                if doc.sparse_indices:
-                    vector["sparse"] = models.SparseVector(
-                        indices=doc.sparse_indices,
-                        values=doc.sparse_values,
-                    )
-                points.append(
-                    models.PointStruct(
-                        id=self._stable_id(doc.id),
-                        vector=vector,
-                        payload={
-                            "doc_id": doc.id,
-                            "path": doc.path,
-                            "doc_type": doc.doc_type,
-                            "feature": doc.feature,
-                            "date": doc.date,
-                            "tags": doc.tags,
-                            "related": doc.related,
-                            "title": doc.title,
-                            "content": doc.content,
-                        },
-                    ),
-                )
-
             self.client.upsert(
                 collection_name=self.TABLE_NAME,
                 points=points,
@@ -397,37 +396,36 @@ class VaultStore:
 
         from qdrant_client import models
 
+        points = []
+        for chunk in chunks:
+            vector: dict = {
+                "dense": chunk.vector,
+            }
+            if chunk.sparse_indices:
+                vector["sparse"] = models.SparseVector(
+                    indices=chunk.sparse_indices,
+                    values=chunk.sparse_values,
+                )
+            points.append(
+                models.PointStruct(
+                    id=self._stable_id(chunk.id),
+                    vector=vector,
+                    payload={
+                        "chunk_id": chunk.id,
+                        "path": chunk.path,
+                        "language": chunk.language,
+                        "content": chunk.content,
+                        "line_start": chunk.line_start,
+                        "line_end": chunk.line_end,
+                        "node_type": chunk.node_type,
+                        "function_name": chunk.function_name,
+                        "class_name": chunk.class_name,
+                    },
+                ),
+            )
+
         with self._client_lock:
             self.ensure_code_table()
-
-            points = []
-            for chunk in chunks:
-                vector: dict = {
-                    "dense": chunk.vector,
-                }
-                if chunk.sparse_indices:
-                    vector["sparse"] = models.SparseVector(
-                        indices=chunk.sparse_indices,
-                        values=chunk.sparse_values,
-                    )
-                points.append(
-                    models.PointStruct(
-                        id=self._stable_id(chunk.id),
-                        vector=vector,
-                        payload={
-                            "chunk_id": chunk.id,
-                            "path": chunk.path,
-                            "language": chunk.language,
-                            "content": chunk.content,
-                            "line_start": chunk.line_start,
-                            "line_end": chunk.line_end,
-                            "node_type": chunk.node_type,
-                            "function_name": chunk.function_name,
-                            "class_name": chunk.class_name,
-                        },
-                    ),
-                )
-
             self.client.upsert(
                 collection_name=self.CODE_TABLE_NAME,
                 points=points,
@@ -694,36 +692,35 @@ class VaultStore:
             UnexpectedResponse,
         )
 
-        with self._client_lock:
-            self.ensure_table()
+        query_filter = self._build_filter(filters)
+        dense_vec = query_vector
+        if not isinstance(query_vector, list):
+            dense_vec = query_vector.tolist()
 
-            query_filter = self._build_filter(filters)
-            dense_vec = query_vector
-            if not isinstance(query_vector, list):
-                dense_vec = query_vector.tolist()
+        prefetch = [
+            models.Prefetch(
+                query=dense_vec,
+                using="dense",
+                limit=limit * 4,
+                filter=query_filter,
+            ),
+        ]
 
-            prefetch = [
+        if sparse_vector is not None:
+            prefetch.append(
                 models.Prefetch(
-                    query=dense_vec,
-                    using="dense",
+                    query=models.SparseVector(
+                        indices=list(sparse_vector.indices),
+                        values=list(sparse_vector.values),
+                    ),
+                    using="sparse",
                     limit=limit * 4,
                     filter=query_filter,
                 ),
-            ]
+            )
 
-            if sparse_vector is not None:
-                prefetch.append(
-                    models.Prefetch(
-                        query=models.SparseVector(
-                            indices=list(sparse_vector.indices),
-                            values=list(sparse_vector.values),
-                        ),
-                        using="sparse",
-                        limit=limit * 4,
-                        filter=query_filter,
-                    ),
-                )
-
+        with self._client_lock:
+            self.ensure_table()
             try:
                 results = self.client.query_points(
                     collection_name=self.TABLE_NAME,
@@ -750,7 +747,7 @@ class VaultStore:
                 )
                 scored_points = fallback.points
 
-            return self._points_to_dicts(scored_points, "doc_id")
+        return self._points_to_dicts(scored_points, "doc_id")
 
     def hybrid_search_codebase(
         self,
@@ -786,36 +783,35 @@ class VaultStore:
             UnexpectedResponse,
         )
 
-        with self._client_lock:
-            self.ensure_code_table()
+        query_filter = self._build_code_filter(filters)
+        dense_vec = query_vector
+        if not isinstance(query_vector, list):
+            dense_vec = query_vector.tolist()
 
-            query_filter = self._build_code_filter(filters)
-            dense_vec = query_vector
-            if not isinstance(query_vector, list):
-                dense_vec = query_vector.tolist()
+        prefetch = [
+            models.Prefetch(
+                query=dense_vec,
+                using="dense",
+                limit=limit * 4,
+                filter=query_filter,
+            ),
+        ]
 
-            prefetch = [
+        if sparse_vector is not None:
+            prefetch.append(
                 models.Prefetch(
-                    query=dense_vec,
-                    using="dense",
+                    query=models.SparseVector(
+                        indices=list(sparse_vector.indices),
+                        values=list(sparse_vector.values),
+                    ),
+                    using="sparse",
                     limit=limit * 4,
                     filter=query_filter,
                 ),
-            ]
+            )
 
-            if sparse_vector is not None:
-                prefetch.append(
-                    models.Prefetch(
-                        query=models.SparseVector(
-                            indices=list(sparse_vector.indices),
-                            values=list(sparse_vector.values),
-                        ),
-                        using="sparse",
-                        limit=limit * 4,
-                        filter=query_filter,
-                    ),
-                )
-
+        with self._client_lock:
+            self.ensure_code_table()
             try:
                 results = self.client.query_points(
                     collection_name=self.CODE_TABLE_NAME,
@@ -842,7 +838,7 @@ class VaultStore:
                 )
                 scored_points = fallback.points
 
-            return self._points_to_dicts(scored_points, "chunk_id")
+        return self._points_to_dicts(scored_points, "chunk_id")
 
     @staticmethod
     def _points_to_dicts(scored_points: list, id_field: str) -> list[dict]:
