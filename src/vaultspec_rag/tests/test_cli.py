@@ -465,6 +465,56 @@ class TestServiceDaemonHelpers:
             server.server_close()
             t.join(timeout=5)
 
+    def test_service_status_renders_health_contract(self, tmp_path: Path):
+        """service status renders project_count and backend capabilities."""
+        import http.server
+        import json
+        import threading
+
+        class _HealthHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(
+                    json.dumps(
+                        {
+                            "status": "ready",
+                            "cuda": True,
+                            "models_loaded": True,
+                            "project_count": 3,
+                            "uptime_s": 12.0,
+                            "backend_capabilities": {
+                                "same_project_search_strategy": "serialized",
+                                "cross_project_search_strategy": "parallel",
+                                "local_storage_process_model": "exclusive",
+                            },
+                        },
+                    ).encode("utf-8"),
+                )
+
+            def log_message(self, format: str, *args: object) -> None:
+                _ = format, args
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), _HealthHandler)
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.handle_request, daemon=True)
+        thread.start()
+        os.environ[EnvVar.STATUS_DIR] = str(tmp_path)
+        try:
+            _write_service_status(pid=os.getpid(), port=port)
+            result = runner.invoke(app, ["server", "service", "status"])
+
+            assert result.exit_code == 0
+            assert "Projects" in result.output
+            assert "3" in result.output
+            assert "Search Concurrency" in result.output
+            assert "Cross-project Search" in result.output
+        finally:
+            os.environ.pop(EnvVar.STATUS_DIR, None)
+            server.server_close()
+            thread.join(timeout=5)
+
 
 def _find_free_port() -> int:
     """Bind to an ephemeral port, close, and return the number.

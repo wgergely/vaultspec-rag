@@ -1840,10 +1840,7 @@ def service_status() -> None:
         table.add_row("Health", health.get("status", "unknown"))
         table.add_row("CUDA", str(health.get("cuda", "unknown")))
         table.add_row("Models loaded", str(health.get("models_loaded", "unknown")))
-        projects = health.get("projects", [])
-        table.add_row("Projects", str(len(projects)))
-        for p in projects:
-            table.add_row("", str(p))
+        table.add_row("Projects", str(health.get("project_count", "unknown")))
         uptime = health.get("uptime_s", 0.0)
         table.add_row("Uptime", f"{uptime:.0f}s")
         caps = health.get("backend_capabilities")
