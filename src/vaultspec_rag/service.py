@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
     from .embeddings import EmbeddingModel
     from .indexer import CodebaseIndexer, VaultIndexer
-    from .search import SearchResult, VaultSearcher
+    from .search import VaultSearcher
     from .store import VaultStore
 
 from .graph_cache import GraphCache
@@ -59,8 +59,6 @@ class ProjectSlot:
         vault_indexer: Incremental indexer for ``.vault/`` documents.
         code_indexer: Incremental indexer for source code files.
         graph_cache: Thread-safe TTL graph cache for this project.
-        search_lock: Per-project lock that serializes vault and
-            codebase searches sharing the same local Qdrant client.
         last_access: Monotonic seconds of the most recent successful
             :meth:`ServiceRegistry.lease` acquire.  Never mutated or
             read outside the registry's ``_lock``.
@@ -74,35 +72,8 @@ class ProjectSlot:
     vault_indexer: VaultIndexer
     code_indexer: CodebaseIndexer
     graph_cache: GraphCache
-    search_lock: threading.Lock = field(default_factory=threading.Lock)
     last_access: float = field(default=0.0)
     ref_count: int = field(default=0)
-
-    def search_vault(self, query: str, *, top_k: int = 5) -> list[SearchResult]:
-        """Search vault documents through this slot's serialized search path."""
-        with self.search_lock:
-            return self.searcher.search_vault(query, top_k=top_k)
-
-    def search_codebase(
-        self,
-        query: str,
-        *,
-        top_k: int = 5,
-        language: str | None = None,
-        node_type: str | None = None,
-        function_name: str | None = None,
-        class_name: str | None = None,
-    ) -> list[SearchResult]:
-        """Search code chunks through this slot's serialized search path."""
-        with self.search_lock:
-            return self.searcher.search_codebase(
-                query,
-                top_k=top_k,
-                language=language,
-                node_type=node_type,
-                function_name=function_name,
-                class_name=class_name,
-            )
 
 
 class ServiceRegistry:

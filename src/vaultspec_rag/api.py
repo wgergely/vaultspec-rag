@@ -124,7 +124,7 @@ def search_vault(
     """
     root = _resolve(root_dir)
     with get_registry().lease(root) as slot:
-        return slot.search_vault(query, top_k=top_k)
+        return slot.searcher.search_vault(query, top_k=top_k)
 
 
 def search_codebase(
@@ -154,7 +154,7 @@ def search_codebase(
     """
     root = _resolve(root_dir)
     with get_registry().lease(root) as slot:
-        return slot.search_codebase(
+        return slot.searcher.search_codebase(
             query,
             top_k=top_k,
             language=language,

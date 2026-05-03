@@ -25,6 +25,7 @@ from anyio.to_thread import run_sync as _run_in_thread
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
+from .capabilities import BackendCapabilities, backend_capabilities_dict
 from .progress import NullProgressReporter
 from .registry import get_registry
 from .service import RegistryFullError
@@ -84,9 +85,7 @@ def _local_store_locked_error_dict(exc: VaultStoreLockedError) -> dict[str, Any]
             "vaultspec-rag service, or retry after the other process exits."
         ),
         "db_path": exc.db_path,
-        "backend": "qdrant-local",
-        "parallel_search_safe": False,
-        "same_project_searches_serialized": True,
+        "backend_capabilities": backend_capabilities_dict(),
     }
 
 
@@ -228,6 +227,7 @@ async def health_handler(_request: Request) -> object:
             "models_loaded": reg_health["model_loaded"],
             "project_count": reg_health["project_count"],
             "uptime_s": round(uptime, 2),
+            "backend_capabilities": backend_capabilities_dict(),
         },
     )
 
@@ -361,31 +361,6 @@ class SearchResultItem(BaseModel):
     class_name: str | None = None
 
 
-class BackendCapabilities(BaseModel):
-    """Search backend concurrency capabilities exposed to tool callers.
-
-    Attributes:
-        backend: Identifier for the active vector-store backend.
-        parallel_search_safe: Whether callers may dispatch multiple
-            same-project search calls in parallel against the backend.
-        same_project_searches_serialized: Whether vaultspec-rag serializes
-            same-project search calls before they reach the backend.
-    """
-
-    backend: str = Field(
-        default="qdrant-local",
-        description="Vector-store backend identifier",
-    )
-    parallel_search_safe: bool = Field(
-        default=False,
-        description="Whether same-project searches may run in parallel",
-    )
-    same_project_searches_serialized: bool = Field(
-        default=True,
-        description="Whether same-project searches are serialized by vaultspec-rag",
-    )
-
-
 class SearchResponse(BaseModel):
     """Response envelope for search tool results.
 
@@ -485,6 +460,8 @@ class HealthResponse(BaseModel):
         models_loaded: Whether GPU models have been loaded.
         project_count: Number of connected projects.
         uptime_s: Seconds since service startup.
+        backend_capabilities: Search concurrency and local storage
+            process-model contract.
     """
 
     status: str = Field(description="Service state")
@@ -497,6 +474,10 @@ class HealthResponse(BaseModel):
     uptime_s: float = Field(
         default=0.0,
         description="Seconds since startup",
+    )
+    backend_capabilities: BackendCapabilities = Field(
+        default_factory=BackendCapabilities,
+        description="Backend concurrency capabilities for agent orchestration",
     )
 
 
@@ -636,7 +617,7 @@ async def search_vault(
         try:
             with _registry.lease(root) as slot:
                 logger.info("Searching vault for: %s", query)
-                results = slot.search_vault(query, top_k=top_k)
+                results = slot.searcher.search_vault(query, top_k=top_k)
                 items = [
                     SearchResultItem.model_validate(r, from_attributes=True)
                     for r in results
@@ -703,7 +684,7 @@ async def search_codebase(
                     query,
                     language,
                 )
-                results = slot.search_codebase(
+                results = slot.searcher.search_codebase(
                     query,
                     top_k=top_k,
                     language=language,

@@ -10,6 +10,8 @@ import pytest
 from typer.testing import CliRunner
 
 from vaultspec_rag.cli import (
+    _add_backend_contract_rows,
+    _display_mcp_error,
     _display_search_results,
     _health_probe,
     _is_our_service,
@@ -257,6 +259,56 @@ class TestMcpFastPath:
             [{"path": "foo.py", "score": 0.9, "snippet": "test"}],
             "vault",
         )
+
+    def test_backend_contract_rows_render(self):
+        """Backend contract rows render stable concurrency wording."""
+        from rich.table import Table
+
+        table = Table(show_header=False)
+        table.add_column("Key")
+        table.add_column("Value")
+
+        _add_backend_contract_rows(
+            table,
+            {
+                "same_project_search_strategy": "serialized",
+                "cross_project_search_strategy": "parallel",
+                "local_storage_process_model": "exclusive",
+            },
+        )
+
+        from io import StringIO
+
+        from rich.console import Console
+
+        out = StringIO()
+        Console(file=out, force_terminal=False, width=120).print(table)
+        rendered = out.getvalue()
+        assert "Search Concurrency" in rendered
+        assert "supported; same-project local backend access serialized" in rendered
+        assert "Storage Process Model" in rendered
+
+    def test_display_mcp_lock_error_renders_contract(self, capsys):
+        """Structured local-store errors show remediation and backend contract."""
+        _display_mcp_error(
+            {
+                "ok": False,
+                "error": "local_store_locked",
+                "message": "Route concurrent searches through one service.",
+                "db_path": "/tmp/qdrant",
+                "backend_capabilities": {
+                    "same_project_search_strategy": "serialized",
+                    "cross_project_search_strategy": "parallel",
+                    "local_storage_process_model": "exclusive",
+                },
+            },
+        )
+
+        out = capsys.readouterr().out
+        assert "Route concurrent searches through one service." in out
+        assert "local_store_locked" in out
+        assert "same-project local backend access" in out
+        assert "serialized" in out
 
 
 class TestServiceDaemonHelpers:
