@@ -593,6 +593,71 @@ class TestGpuLock:
             registry.close_project(root_b)
 
 
+class TestSearchSerialization:
+    """Same-project searches serialize on the ProjectSlot search lock."""
+
+    pytestmark: ClassVar = [pytest.mark.integration]
+
+    def _assert_search_waits_for_project_lock(
+        self,
+        slot: ProjectSlot,
+        search_call,
+    ) -> None:
+        """Hold the real slot lock and prove a real search waits for it."""
+        locked = slot.search_lock.acquire(timeout=5)
+        assert locked, "test could not acquire the project search lock"
+
+        started = threading.Event()
+        finished = threading.Event()
+        errors: list[BaseException] = []
+
+        def worker() -> None:
+            started.set()
+            try:
+                search_call()
+            except BaseException as exc:  # pragma: no cover - reported below
+                errors.append(exc)
+            finally:
+                finished.set()
+
+        thread = threading.Thread(target=worker, name="project-search-lock-test")
+        thread.start()
+
+        try:
+            assert started.wait(timeout=5), "search worker did not start"
+            time.sleep(0.25)
+            assert thread.is_alive(), (
+                "search completed while the project search lock was held"
+            )
+            assert not finished.is_set()
+        finally:
+            slot.search_lock.release()
+
+        thread.join(timeout=60)
+        assert not thread.is_alive(), "search worker did not finish after lock release"
+        assert errors == []
+
+    def test_vault_and_codebase_searches_wait_for_project_lock(
+        self,
+        registry: ServiceRegistry,
+        tmp_path: Path,
+    ) -> None:
+        root = _make_vault_dir(tmp_path)
+        slot = registry.peek_project(root)
+
+        try:
+            self._assert_search_waits_for_project_lock(
+                slot,
+                lambda: slot.search_vault("architecture", top_k=1),
+            )
+            self._assert_search_waits_for_project_lock(
+                slot,
+                lambda: slot.search_codebase("search logic", top_k=1),
+            )
+        finally:
+            registry.close_project(root)
+
+
 class TestPerRootLocks:
     """Per-root locks allow parallel get_project() for different roots (PERF-002)."""
 

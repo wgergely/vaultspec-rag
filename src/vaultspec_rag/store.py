@@ -37,7 +37,11 @@ class VaultStoreLockedError(RuntimeError):
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
         super().__init__(
-            f"Qdrant storage at {db_path} is already in use by another process.",
+            "Qdrant storage at "
+            f"{db_path} is already in use by another process. "
+            "Local-file-backed RAG storage is not parallel-safe across "
+            "multiple vaultspec-rag processes; route concurrent searches "
+            "through one resident service or retry after the holder exits.",
         )
 
 

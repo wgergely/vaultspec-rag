@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 from .progress import NullProgressReporter
 from .registry import get_registry
 from .service import RegistryFullError
+from .store import VaultStoreLockedError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -69,6 +70,23 @@ def _registry_full_error_dict(exc: RegistryFullError) -> dict[str, Any]:
         "message": str(exc),
         "max_projects": _registry.max_projects,
         "busy_projects": [str(p) for p in _registry.busy_roots()],
+    }
+
+
+def _local_store_locked_error_dict(exc: VaultStoreLockedError) -> dict[str, Any]:
+    """Build a structured error for local Qdrant file-lock contention."""
+    return {
+        "ok": False,
+        "error": "local_store_locked",
+        "message": (
+            "The local Qdrant index is already open by another vaultspec-rag "
+            "process. Route concurrent searches through one resident "
+            "vaultspec-rag service, or retry after the other process exits."
+        ),
+        "db_path": exc.db_path,
+        "backend": "qdrant-local",
+        "parallel_search_safe": False,
+        "same_project_searches_serialized": True,
     }
 
 
@@ -343,6 +361,31 @@ class SearchResultItem(BaseModel):
     class_name: str | None = None
 
 
+class BackendCapabilities(BaseModel):
+    """Search backend concurrency capabilities exposed to tool callers.
+
+    Attributes:
+        backend: Identifier for the active vector-store backend.
+        parallel_search_safe: Whether callers may dispatch multiple
+            same-project search calls in parallel against the backend.
+        same_project_searches_serialized: Whether vaultspec-rag serializes
+            same-project search calls before they reach the backend.
+    """
+
+    backend: str = Field(
+        default="qdrant-local",
+        description="Vector-store backend identifier",
+    )
+    parallel_search_safe: bool = Field(
+        default=False,
+        description="Whether same-project searches may run in parallel",
+    )
+    same_project_searches_serialized: bool = Field(
+        default=True,
+        description="Whether same-project searches are serialized by vaultspec-rag",
+    )
+
+
 class SearchResponse(BaseModel):
     """Response envelope for search tool results.
 
@@ -350,6 +393,8 @@ class SearchResponse(BaseModel):
         results: Ranked list of search result items, ordered
             by descending relevance score.
         summary: Human-readable summary of the search outcome.
+        backend_capabilities: Concurrency capabilities for the
+            active local vector backend.
     """
 
     results: list[SearchResultItem] = Field(
@@ -357,6 +402,10 @@ class SearchResponse(BaseModel):
     )
     summary: str = Field(
         description="Human-readable summary of findings",
+    )
+    backend_capabilities: BackendCapabilities = Field(
+        default_factory=BackendCapabilities,
+        description="Backend concurrency capabilities for agent orchestration",
     )
 
 
@@ -370,6 +419,8 @@ class IndexStatus(BaseModel):
             database directory.
         target_dir: Workspace root directory being indexed.
         vram_gb: Total GPU VRAM in gigabytes.
+        backend_capabilities: Concurrency capabilities for the
+            active local vector backend.
     """
 
     vault_count: int = Field(
@@ -387,6 +438,10 @@ class IndexStatus(BaseModel):
     vram_gb: float = Field(
         default=0.0,
         description="Total GPU VRAM in GB",
+    )
+    backend_capabilities: BackendCapabilities = Field(
+        default_factory=BackendCapabilities,
+        description="Backend concurrency capabilities for agent orchestration",
     )
 
 
@@ -565,7 +620,9 @@ async def search_vault(
 
     Returns:
         SearchResponse with ranked vault results and a
-        human-readable summary.
+        human-readable summary. Same-project searches are serialized
+        inside the service because the local Qdrant backend is not
+        safe for parallel access through the same project slot.
 
     Raises:
         RuntimeError: If RAG components fail to initialize
@@ -579,7 +636,7 @@ async def search_vault(
         try:
             with _registry.lease(root) as slot:
                 logger.info("Searching vault for: %s", query)
-                results = slot.searcher.search_vault(query, top_k=top_k)
+                results = slot.search_vault(query, top_k=top_k)
                 items = [
                     SearchResultItem.model_validate(r, from_attributes=True)
                     for r in results
@@ -590,6 +647,8 @@ async def search_vault(
                 )
         except RegistryFullError as exc:
             return _registry_full_error_dict(exc)
+        except VaultStoreLockedError as exc:
+            return _local_store_locked_error_dict(exc)
 
     result = await _run_in_thread(_run)
     if isinstance(result, SearchResponse):
@@ -624,7 +683,9 @@ async def search_codebase(
 
     Returns:
         SearchResponse with ranked codebase results and a
-        human-readable summary.
+        human-readable summary. Same-project searches are serialized
+        inside the service because the local Qdrant backend is not
+        safe for parallel access through the same project slot.
 
     Raises:
         RuntimeError: If RAG components fail to initialize
@@ -642,7 +703,7 @@ async def search_codebase(
                     query,
                     language,
                 )
-                results = slot.searcher.search_codebase(
+                results = slot.search_codebase(
                     query,
                     top_k=top_k,
                     language=language,
@@ -660,6 +721,8 @@ async def search_codebase(
                 )
         except RegistryFullError as exc:
             return _registry_full_error_dict(exc)
+        except VaultStoreLockedError as exc:
+            return _local_store_locked_error_dict(exc)
 
     result = await _run_in_thread(_run)
     if isinstance(result, SearchResponse):
