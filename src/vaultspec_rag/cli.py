@@ -962,6 +962,11 @@ def _try_mcp_search(
     top_k: int,
     port: int,
     project_root: str,
+    *,
+    language: str | None = None,
+    node_type: str | None = None,
+    function_name: str | None = None,
+    class_name: str | None = None,
 ) -> list[dict[str, object]] | dict[str, object] | None:
     """Search via a running MCP server over HTTP.
 
@@ -977,6 +982,12 @@ def _try_mcp_search(
         project_root: Absolute path to the target project. The
             HTTP service is multi-tenant and has no default
             project, so every tool call must carry this value.
+        language: Optional language filter for code search.
+        node_type: Optional AST node-type filter for code search.
+        function_name: Optional function/method-name filter for
+            code search.
+        class_name: Optional class/struct-name filter for code
+            search.
 
     Returns:
         List of result dicts on success, a structured MCP error
@@ -990,6 +1001,25 @@ def _try_mcp_search(
     tool_map = {"vault": "search_vault", "code": "search_codebase"}
     tool_name = tool_map.get(search_type, "search_vault")
 
+    code_filters = {
+        "language": language,
+        "node_type": node_type,
+        "function_name": function_name,
+        "class_name": class_name,
+    }
+    has_filter = any(v is not None for v in code_filters.values())
+    if has_filter and search_type != "code":
+        offending = sorted(k for k, v in code_filters.items() if v is not None)
+        return {
+            "ok": False,
+            "error": "invalid_filter_for_search_type",
+            "message": (
+                "code-search filters "
+                f"({', '.join(offending)}) require --type code; "
+                f"got --type {search_type}."
+            ),
+        }
+
     async def _call() -> list[dict[str, object]] | dict[str, object] | None:
         try:
             import json
@@ -999,6 +1029,15 @@ def _try_mcp_search(
             from mcp.types import TextContent
 
             url = f"http://127.0.0.1:{port}/mcp"
+            payload: dict[str, object] = {
+                "query": query,
+                "top_k": top_k,
+                "project_root": project_root,
+            }
+            if search_type == "code":
+                for key, value in code_filters.items():
+                    if value is not None:
+                        payload[key] = value
             async with (
                 streamable_http_client(url) as (read, write, _),
                 ClientSession(read, write) as session,
@@ -1006,11 +1045,7 @@ def _try_mcp_search(
                 await session.initialize()
                 result = await session.call_tool(
                     tool_name,
-                    {
-                        "query": query,
-                        "top_k": top_k,
-                        "project_root": project_root,
-                    },
+                    payload,
                 )
                 if result.content:
                     first = result.content[0]
@@ -1128,6 +1163,27 @@ def handle_search(
     state: CLIState = ctx.obj
     target = state.target
 
+    code_filters_supplied = any(
+        v is not None for v in (language, node_type, function_name, class_name)
+    )
+    if code_filters_supplied and search_type != "code":
+        offending = sorted(
+            name
+            for name, value in (
+                ("language", language),
+                ("node_type", node_type),
+                ("function_name", function_name),
+                ("class_name", class_name),
+            )
+            if value is not None
+        )
+        console.print(
+            "[red]code-search filters ("
+            + ", ".join(offending)
+            + f") require --type code; got --type {search_type}.[/]"
+        )
+        raise typer.Exit(code=2)
+
     if port is not None:
         mcp_results = _try_mcp_search(
             query,
@@ -1135,6 +1191,10 @@ def handle_search(
             max_results,
             port,
             str(target),
+            language=language,
+            node_type=node_type,
+            function_name=function_name,
+            class_name=class_name,
         )
         if mcp_results is not None:
             if isinstance(mcp_results, dict):

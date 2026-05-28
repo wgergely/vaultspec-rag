@@ -238,6 +238,73 @@ class TestMcpFastPath:
         result = _try_mcp_search("test query", "invalid", 5, 1, "/tmp/proj")
         assert result is None
 
+    def test_code_filters_with_vault_returns_usage_error(self):
+        """Filter kwargs with --type vault yield a structured usage error."""
+        result = _try_mcp_search(
+            "test query",
+            "vault",
+            5,
+            1,
+            "/tmp/proj",
+            function_name="foo",
+        )
+        assert isinstance(result, dict)
+        assert result.get("ok") is False
+        assert result.get("error") == "invalid_filter_for_search_type"
+        assert "function_name" in str(result.get("message", ""))
+
+    def test_code_filters_with_all_returns_usage_error(self):
+        """search_type='all' is also incompatible with code-only filters."""
+        result = _try_mcp_search(
+            "q",
+            "all",
+            5,
+            1,
+            "/tmp/proj",
+            language="python",
+            class_name="Foo",
+        )
+        assert isinstance(result, dict)
+        assert result.get("error") == "invalid_filter_for_search_type"
+        msg = str(result.get("message", ""))
+        assert "language" in msg and "class_name" in msg
+
+    def test_code_filters_unset_dont_short_circuit(self):
+        """All filters None must not trigger the usage error path."""
+        # No service running on port 1 → expect transport None, NOT usage-error dict.
+        result = _try_mcp_search("q", "vault", 5, 1, "/tmp/proj")
+        assert result is None
+
+    def test_code_filters_with_code_attempts_call(self):
+        """Filters paired with --type code reach the call path; no service → None."""
+        result = _try_mcp_search(
+            "q",
+            "code",
+            5,
+            1,
+            "/tmp/proj",
+            language="python",
+            function_name="foo",
+        )
+        # No live service → transport failure → None (not a usage-error dict).
+        assert result is None
+
+    def test_search_cmd_rejects_filter_with_vault(self):
+        """The CLI ``search`` command refuses filter flags when --type vault."""
+        result = runner.invoke(
+            app,
+            [
+                "search",
+                "anything",
+                "--type",
+                "vault",
+                "--function-name",
+                "foo",
+            ],
+        )
+        assert result.exit_code == 2
+        assert "require --type code" in result.output
+
     def test_display_empty_results(self):
         """Empty results list renders without raising."""
         _display_search_results([], "vault")
