@@ -305,6 +305,223 @@ class TestMcpFastPath:
         assert result.exit_code == 2
         assert "require --type code" in result.output
 
+    def test_search_cmd_rejects_vault_filter_with_code(self):
+        """Vault filters with --type code error explicitly."""
+        result = runner.invoke(
+            app,
+            [
+                "search",
+                "anything",
+                "--type",
+                "code",
+                "--feature",
+                "auth",
+            ],
+        )
+        assert result.exit_code == 2
+        assert "require --type vault" in result.output
+
+    def test_path_filter_with_vault_returns_usage_error(self):
+        """--path is a code filter; pairing it with vault must error."""
+        result = _try_mcp_search(
+            "test",
+            "vault",
+            5,
+            1,
+            "/tmp/proj",
+            path="src/foo.py",
+        )
+        assert isinstance(result, dict)
+        assert result.get("error") == "invalid_filter_for_search_type"
+        assert "path" in str(result.get("message", ""))
+
+    def test_vault_filter_with_code_returns_usage_error(self):
+        """doc_type/feature/date/tag with --type code must error."""
+        result = _try_mcp_search(
+            "test",
+            "code",
+            5,
+            1,
+            "/tmp/proj",
+            doc_type="adr",
+        )
+        assert isinstance(result, dict)
+        assert result.get("error") == "invalid_filter_for_search_type"
+        assert "doc_type" in str(result.get("message", ""))
+
+    def test_vault_filters_with_code_attempt_call(self):
+        """doc_type/feature/date/tag with --type vault reach the call path."""
+        result = _try_mcp_search(
+            "q",
+            "vault",
+            5,
+            1,
+            "/tmp/proj",
+            doc_type="adr",
+            feature="auth",
+            date="2026-05-28",
+            tag="auth",
+        )
+        # No live service → ConnectionRefused → None.
+        assert result is None
+
+    def test_path_filter_with_code_attempts_call(self):
+        """--path with --type code reaches the call path."""
+        result = _try_mcp_search(
+            "q",
+            "code",
+            5,
+            1,
+            "/tmp/proj",
+            path="src/foo.py",
+        )
+        assert result is None
+
+
+class TestSearchSafetyContract:
+    """Wave 1B: fail-hard fast path + path indicator + tqdm suppression."""
+
+    pytestmark: typing.ClassVar = [pytest.mark.unit]
+
+    def test_search_port_dead_default_fails_hard(self, tmp_path):
+        """--port unreachable + no --allow-fallback exits non-zero."""
+        (tmp_path / ".vaultspec").mkdir()
+        result = runner.invoke(
+            app,
+            [
+                "--target",
+                str(tmp_path),
+                "search",
+                "anything",
+                "--port",
+                "1",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "unreachable" in result.output.lower()
+        assert "allow-fallback" in result.output.lower()
+
+    def test_search_port_dead_with_allow_fallback_prints_warning(self, tmp_path):
+        """--allow-fallback emits the legacy fallthrough warning."""
+        (tmp_path / ".vaultspec").mkdir()
+        result = runner.invoke(
+            app,
+            [
+                "--target",
+                str(tmp_path),
+                "search",
+                "anything",
+                "--port",
+                "1",
+                "--allow-fallback",
+            ],
+        )
+        normalized = " ".join(result.output.split())
+        assert "--allow-fallback set" in normalized
+
+    def test_search_results_via_mcp_indicator(self):
+        """via='mcp' renders '(via MCP)' in the table title."""
+        from io import StringIO
+
+        from rich.console import Console
+
+        out = StringIO()
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "vaultspec_rag.cli.console",
+                Console(file=out, force_terminal=False, width=400),
+            )
+            _display_search_results(
+                [{"path": "foo.py", "score": 0.9, "snippet": "x"}],
+                "code",
+                via="mcp",
+            )
+        rendered = " ".join(out.getvalue().split())
+        assert "(via MCP)" in rendered
+
+    def test_search_results_via_in_process_indicator(self):
+        """via='in-process' renders '(via in-process)' in the title."""
+        from io import StringIO
+
+        from rich.console import Console
+
+        out = StringIO()
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "vaultspec_rag.cli.console",
+                Console(file=out, force_terminal=False, width=400),
+            )
+            _display_search_results(
+                [{"path": "foo.py", "score": 0.9, "snippet": "x"}],
+                "code",
+                via="in-process",
+            )
+        rendered = " ".join(out.getvalue().split())
+        assert "(via in-process)" in rendered
+
+    def test_suppress_hf_progress_sets_env(self, monkeypatch):
+        """_suppress_hf_progress sets the HF env vars idempotently."""
+        from vaultspec_rag.cli import _suppress_hf_progress
+
+        monkeypatch.delenv("HF_HUB_DISABLE_PROGRESS_BARS", raising=False)
+        monkeypatch.delenv("TRANSFORMERS_VERBOSITY", raising=False)
+        _suppress_hf_progress()
+        assert os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] == "1"
+        assert os.environ["TRANSFORMERS_VERBOSITY"] == "error"
+
+
+class TestCleanRequiredTarget:
+    """Wave 1C: clean target is required (no default)."""
+
+    pytestmark: typing.ClassVar = [pytest.mark.unit]
+
+    def test_clean_no_target_errors(self, tmp_path):
+        """`vaultspec-rag clean` without a target exits non-zero."""
+        result = runner.invoke(
+            app,
+            ["--target", str(tmp_path), "clean"],
+        )
+        # Typer surfaces missing required argument with exit code 2
+        # and "Missing argument" in stderr.
+        assert result.exit_code != 0
+
+
+class TestNoTruncateFlag:
+    """Wave 1C: --no-truncate bypasses snippet truncation."""
+
+    pytestmark: typing.ClassVar = [pytest.mark.unit]
+
+    def _render(self, snippet: str, no_truncate: bool) -> str:
+        from io import StringIO
+
+        from rich.console import Console
+
+        out = StringIO()
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "vaultspec_rag.cli.console",
+                Console(file=out, force_terminal=False, width=400),
+            )
+            _display_search_results(
+                [{"path": "foo.py", "score": 0.9, "snippet": snippet}],
+                "code",
+                via="mcp",
+                no_truncate=no_truncate,
+            )
+        # Strip Rich wrapping whitespace before substring matching.
+        return "".join(out.getvalue().split())
+
+    def test_no_truncate_keeps_full_snippet(self):
+        """no_truncate=True renders the snippet untruncated."""
+        rendered = self._render("a" * 300, no_truncate=True)
+        assert "a" * 250 in rendered
+
+    def test_default_truncates_at_120(self):
+        """Default behaviour caps the snippet at 120 chars."""
+        rendered = self._render("a" * 300, no_truncate=False)
+        # 300 chars truncated to 120 — a 200-a run cannot appear.
+        assert "a" * 200 not in rendered
+
     def test_display_empty_results(self):
         """Empty results list renders without raising."""
         _display_search_results([], "vault")
