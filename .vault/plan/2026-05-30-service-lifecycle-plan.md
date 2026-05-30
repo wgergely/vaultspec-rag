@@ -162,10 +162,27 @@ test of the live integration depends on Phase 1 + 2 both shipping.
 
 ## Verification
 
-- 587+ unit tests pass (current baseline) plus new ones for
-  Phase 4.
-- 180+ integration tests pass plus the new lifecycle
-  integration test.
-- ruff + mdformat + vault check schema clean.
-- Manual smoke walks the full sequence above. Document outcome
+- 209+ unit tests pass (was 196 + 13 new for Wave 2). ruff +
+  mdformat + vault check schema clean.
+- Smoke walkthrough on Windows (`port 18877`) confirmed:
+  - `service status` with no file: exit 3, "stopped" state +
+    `Service JSON: missing` divergence row.
+  - Service started: status renders five divergence rows
+    (`Service JSON: present`, `PID Alive: yes`, `PID Matches Service: yes`, `Port Listening: yes`, `Heartbeat: 9s ago`)
+    plus `State: running` + full health/capabilities.
+  - `last_heartbeat` advanced from 17:01:10 -> 17:01:25 over an
+    18s sleep — exactly one `_HEARTBEAT_INTERVAL_SECONDS` tick.
+  - `service.lifecycle event=startup pid=...` line lands in
+    `service.log` at WARNING level (visible at the default
+    threshold).
+  - `server service stop`: `service.json` removed, exit clean.
+- **Known Windows limitation**: `os.kill(pid, SIGTERM)` is
+  `TerminateProcess` on Windows — the daemon never runs its
+  atexit handler or lifespan `finally` on a `server service stop`, so the `event=shutdown reason=clean` line never reaches
+  `service.log` on Windows. The CLI parent unlinks
+  `service.json` itself (existing behaviour) so the file
+  lifecycle is still correct; only the daemon-side shutdown log
+  entry is missing. On POSIX the lifespan finally + atexit run
+  normally. The CLI could mirror the log line itself if needed
+  in a follow-up; not blocking for this issue.
   in the plan before merging the PR.
