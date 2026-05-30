@@ -414,6 +414,11 @@ class VaultSearcher:
         parsed: ParsedQuery,
         query_text: str,
         top_k: int,
+        *,
+        doc_type: str | None = None,
+        feature: str | None = None,
+        date: str | None = None,
+        tag: str | None = None,
     ) -> list[SearchResult]:
         """Search vault using pre-encoded dense and sparse vectors.
 
@@ -426,6 +431,10 @@ class VaultSearcher:
             parsed: Parsed query with extracted metadata filters.
             query_text: Clean query text (filters removed).
             top_k: Maximum number of results to return.
+            doc_type: Optional vault doc-type filter (e.g. ``'adr'``).
+            feature: Optional feature-tag filter.
+            date: Optional ISO date filter.
+            tag: Optional free-form tag filter.
 
         Returns:
             Ranked list of vault SearchResult instances.
@@ -435,6 +444,14 @@ class VaultSearcher:
             for k, v in parsed.filters.items()
             if k in ("doc_type", "feature", "date", "tag")
         }
+        if doc_type is not None:
+            store_filters["doc_type"] = doc_type
+        if feature is not None:
+            store_filters["feature"] = feature
+        if date is not None:
+            store_filters["date"] = date
+        if tag is not None:
+            store_filters["tag"] = tag
 
         # Fetch extra candidates when reranker will narrow them down
         fetch_limit = max(top_k * 4, 20) if self._reranker_enabled else top_k * 2
@@ -476,6 +493,7 @@ class VaultSearcher:
         top_k: int,
         *,
         language: str | None = None,
+        path: str | None = None,
         node_type: str | None = None,
         function_name: str | None = None,
         class_name: str | None = None,
@@ -506,6 +524,8 @@ class VaultSearcher:
         }
         if language is not None:
             store_filters["language"] = language
+        if path is not None:
+            store_filters["path"] = path
         if node_type is not None:
             store_filters["node_type"] = node_type
         if function_name is not None:
@@ -567,7 +587,16 @@ class VaultSearcher:
             sparse_vector = self.model.encode_query_sparse(query_text)
         return parsed, query_text, query_vector, sparse_vector
 
-    def search_vault(self, raw_query: str, top_k: int = 5) -> list[SearchResult]:
+    def search_vault(
+        self,
+        raw_query: str,
+        top_k: int = 5,
+        *,
+        doc_type: str | None = None,
+        feature: str | None = None,
+        date: str | None = None,
+        tag: str | None = None,
+    ) -> list[SearchResult]:
         """Search only the vault collection.
 
         Parses the query, encodes it, and delegates to
@@ -577,6 +606,10 @@ class VaultSearcher:
             raw_query: Natural language query, optionally with
                 filter tokens.
             top_k: Maximum number of results to return.
+            doc_type: Optional vault doc-type filter (e.g. ``'adr'``).
+            feature: Optional feature-tag filter.
+            date: Optional ISO date filter.
+            tag: Optional free-form tag filter.
 
         Returns:
             Ranked list of vault SearchResult instances.
@@ -588,6 +621,10 @@ class VaultSearcher:
             parsed,
             query_text,
             top_k,
+            doc_type=doc_type,
+            feature=feature,
+            date=date,
+            tag=tag,
         )
 
     def search_codebase(
@@ -596,6 +633,7 @@ class VaultSearcher:
         top_k: int = 5,
         *,
         language: str | None = None,
+        path: str | None = None,
         node_type: str | None = None,
         function_name: str | None = None,
         class_name: str | None = None,
@@ -606,6 +644,8 @@ class VaultSearcher:
             raw_query: Natural language query or code snippet.
             top_k: Number of results to return.
             language: Optional language filter (e.g., 'python', 'rust').
+            path: Optional exact-match path filter
+                (KEYWORD payload index).
             node_type: Optional AST node type filter.
             function_name: Optional function/method name filter.
             class_name: Optional class/struct name filter.
@@ -621,6 +661,7 @@ class VaultSearcher:
             query_text,
             top_k,
             language=language,
+            path=path,
             node_type=node_type,
             function_name=function_name,
             class_name=class_name,
