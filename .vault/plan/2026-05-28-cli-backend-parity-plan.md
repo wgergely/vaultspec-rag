@@ -215,14 +215,31 @@ consistent.
   `streamable_http_client('.../mcp/')` returns 8 tools without a
   redirect hop. The trailing-slash fix is correct.
 
-### Deferred (not blockers for the PR)
+### Verification outcomes
 
-- Manual smoke test of the fail-hard contract against a real
-  service stop -> start -> stop cycle. Unit tests cover the code
-  paths; the manual walkthrough is documented as Wave 1F-8 and
-  will be executed before the bundle is merged.
-- Integration suite execution was queued during the hardening
-  pass; results documented inline below once available.
+- **Integration suite (1F-7):** 180 tests passed in 949s against
+  `feature/107-cli-search-filters` at `d559ae5`. No regressions
+  introduced by the bundle.
+- **Real-world smoke test (1F-8):** booted the service on port
+  18877 and walked the fail-hard contract end-to-end:
+  - Indexed the vault via `--port`; the summary title rendered
+    `Indexing Summary (via MCP)`. 170 chunks indexed.
+  - `search --port --type vault --doc-type adr` returned an
+    ADR as the top hit. Filter forwarding through MCP is live.
+  - `search --port --type vault --doc-type NONEXISTENT-TYPE`
+    returned zero results, confirming the filter is real (not
+    silently dropped as in 0.2.8).
+  - Stopped the service; `search --port` exited 1 with the new
+    remediation text instead of silently relaning.
+  - `search --port --allow-fallback` printed the legacy
+    fallthrough warning, executed the search in-process, and
+    rendered `Search Results: vault (via in-process)`.
+  - No `Loading weights:` tqdm output appeared on stdout during
+    any in-process invocation, confirming the env-var +
+    show_progress_bar suppression works in practice.
+
+### Deferred
+
 - CHANGELOG content: this repo is release-please-managed and does
   not keep a manual `## Unreleased` section (see commit
   `bb90689`). Conventional-commit prefixes in the bundle commits
