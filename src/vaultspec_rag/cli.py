@@ -743,7 +743,7 @@ def handle_index(
             store.close()
 
     # Summary table
-    table = Table(title="Indexing Summary", show_header=True)
+    table = Table(title="Indexing Summary (via in-process)", show_header=True)
     table.add_column("Source", style="bold")
     table.add_column("Added", style="green", justify="right")
     table.add_column("Updated", style="yellow", justify="right")

@@ -283,14 +283,16 @@ Index vault documents (markdown in `.vault/`) or codebase source files, or both.
 
 The MCP server exposes six tools:
 
-| Tool               | Purpose                                  |
-| ------------------ | ---------------------------------------- |
-| `search_vault`     | Search vault documents                   |
-| `search_codebase`  | Search source code with optional filters |
-| `reindex_vault`    | Re-index vault (incremental or clean)    |
-| `reindex_codebase` | Re-index codebase (incremental or clean) |
-| `get_index_status` | Return index stats and GPU status        |
-| `get_code_file`    | Retrieve full source file content        |
+| Tool               | Purpose                                                                                               |
+| ------------------ | ----------------------------------------------------------------------------------------------------- |
+| `search_vault`     | Search vault documents. Filters: `doc_type`, `feature`, `date`, `tag` (all KEYWORD exact)             |
+| `search_codebase`  | Search source code. Filters: `language`, `path`, `node_type`, `function_name`, `class_name` (KEYWORD) |
+| `reindex_vault`    | Re-index vault (incremental or clean)                                                                 |
+| `reindex_codebase` | Re-index codebase (incremental or clean)                                                              |
+| `get_index_status` | Return index stats and GPU status                                                                     |
+| `get_code_file`    | Retrieve full source file content                                                                     |
+| `list_projects`    | Enumerate projects warm in the registry                                                               |
+| `evict_project`    | Drop a project's models + Qdrant lock from the registry                                               |
 
 The server runs in one of two transport modes, and the rules for the `project_root` parameter differ between them.
 
@@ -351,14 +353,14 @@ See [Service management](#service-management) for daemon lifecycle details.
 
 The `vaultspec_rag` package exports a facade in `vaultspec_rag.api`:
 
-| Function                                                           | Purpose                                           |
-| ------------------------------------------------------------------ | ------------------------------------------------- |
-| `index(root_dir, *, full=False)`                                   | Index vault documents                             |
-| `index_codebase(root_dir, *, full=False)`                          | Index source files                                |
-| `search_vault(root_dir, query, *, top_k=5)`                        | Search vault                                      |
-| `search_codebase(root_dir, query, *, top_k=5, language=None, ...)` | Search code                                       |
-| `list_documents(root_dir, doc_type=None)`                          | List indexed documents                            |
-| `get_related(root_dir, doc_id)`                                    | Get graph relationships (outgoing/incoming links) |
+| Function                                                                                                                      | Purpose                                           |
+| ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `index(root_dir, *, full=False)`                                                                                              | Index vault documents                             |
+| `index_codebase(root_dir, *, full=False)`                                                                                     | Index source files                                |
+| `search_vault(root_dir, query, *, top_k=5, doc_type=None, feature=None, date=None, tag=None)`                                 | Search vault                                      |
+| `search_codebase(root_dir, query, *, top_k=5, language=None, path=None, node_type=None, function_name=None, class_name=None)` | Search code                                       |
+| `list_documents(root_dir, doc_type=None)`                                                                                     | List indexed documents                            |
+| `get_related(root_dir, doc_id)`                                                                                               | Get graph relationships (outgoing/incoming links) |
 
 All functions accept a `root_dir: Path` and manage a thread-safe singleton engine internally. The engine loads GPU models on first call.
 

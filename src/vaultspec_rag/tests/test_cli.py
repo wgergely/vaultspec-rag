@@ -377,6 +377,76 @@ class TestMcpFastPath:
         )
         assert result is None
 
+    def test_live_but_broken_returns_structured_error(self, monkeypatch):
+        """Non-connection-refused exception yields ok=False dict, not None.
+
+        Without this discrimination the caller would treat a
+        live-but-broken service the same as a dead one and silently
+        relane to the unsafe in-process path. The fix preserves the
+        ``None`` -> dead-service semantic for ConnectionRefused only.
+        """
+        import asyncio
+
+        from vaultspec_rag import cli as cli_mod
+
+        def _boom(*_args, **_kwargs):
+            raise RuntimeError("synthetic live-but-broken tool failure")
+
+        monkeypatch.setattr(asyncio, "run", _boom)
+
+        result = cli_mod._try_mcp_search(
+            "q",
+            "code",
+            5,
+            8766,
+            "/tmp/proj",
+        )
+        assert isinstance(result, dict)
+        assert result.get("ok") is False
+        assert result.get("error") == "mcp_call_failed"
+        assert "synthetic live-but-broken" in str(result.get("message", ""))
+
+    def test_live_but_broken_reindex_returns_structured_error(self, monkeypatch):
+        """Same discrimination for _try_mcp_reindex."""
+        import asyncio
+
+        from vaultspec_rag import cli as cli_mod
+
+        def _boom(*_args, **_kwargs):
+            raise RuntimeError("tool unavailable")
+
+        monkeypatch.setattr(asyncio, "run", _boom)
+
+        result = cli_mod._try_mcp_reindex(
+            "reindex_vault",
+            False,
+            8766,
+            "/tmp/proj",
+        )
+        assert isinstance(result, dict)
+        assert result.get("ok") is False
+        assert result.get("error") == "mcp_call_failed"
+
+    def test_connection_refused_still_returns_none(self, monkeypatch):
+        """Explicit ConnectionRefusedError must keep the dead-service path."""
+        import asyncio
+
+        from vaultspec_rag import cli as cli_mod
+
+        def _refuse(*_args, **_kwargs):
+            raise ConnectionRefusedError("port closed")
+
+        monkeypatch.setattr(asyncio, "run", _refuse)
+
+        result = cli_mod._try_mcp_search(
+            "q",
+            "code",
+            5,
+            8766,
+            "/tmp/proj",
+        )
+        assert result is None
+
 
 class TestSearchSafetyContract:
     """Wave 1B: fail-hard fast path + path indicator + tqdm suppression."""

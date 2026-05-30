@@ -181,3 +181,49 @@ Phase 5 docs depend on the final flag shape, so do it last.
 
 Wave 2 verification is deferred to the follow-up issues; this plan
 does not implement them.
+
+## Wave 1 hardening (post-bundle self-audit)
+
+After Waves 1A-1E shipped to PR #109 a self-audit identified
+several gaps where the bundle had been less thorough than the
+issues warranted. The hardening pass below was tracked as Wave 1F
+and folded into the same PR so the published surface is internally
+consistent.
+
+### Findings
+
+- `handle_index`'s in-process fallback rendered `Indexing Summary`
+  without a path indicator while `handle_search` already shipped
+  `(via in-process)`. The asymmetry contradicted the rationale in
+  the ADR. **Fixed**: `cli.py:746` now reads
+  `Indexing Summary (via in-process)`.
+- `_suppress_hf_progress` set HuggingFace env vars but
+  `CrossEncoder.predict` still emitted batch bars during in-process
+  reranking. **Fixed**: passed `show_progress_bar=False` to
+  `reranker.predict` in `search.py`.
+- `src/vaultspec_rag/README.md`'s MCP-tools table and Python API
+  table still showed the pre-bundle `search_codebase` /
+  `search_vault` signatures. **Fixed**: both tables now list every
+  new filter parameter.
+- The Wave 1B exception discrimination in `_try_mcp_search` /
+  `_try_mcp_reindex` was tested only on the connection-refused
+  leg. **Fixed**: three new tests exercise the live-but-broken
+  structured-error return path via monkeypatched `asyncio.run`.
+- The 307 `/mcp` -> `/mcp/` redirect fix was reasoned about but
+  not verified. **Verified**: booted the service on port 18877,
+  observed `GET /mcp` -> 307 Location: /mcp/ and confirmed
+  `streamable_http_client('.../mcp/')` returns 8 tools without a
+  redirect hop. The trailing-slash fix is correct.
+
+### Deferred (not blockers for the PR)
+
+- Manual smoke test of the fail-hard contract against a real
+  service stop -> start -> stop cycle. Unit tests cover the code
+  paths; the manual walkthrough is documented as Wave 1F-8 and
+  will be executed before the bundle is merged.
+- Integration suite execution was queued during the hardening
+  pass; results documented inline below once available.
+- CHANGELOG content: this repo is release-please-managed and does
+  not keep a manual `## Unreleased` section (see commit
+  `bb90689`). Conventional-commit prefixes in the bundle commits
+  populate the next entry automatically.

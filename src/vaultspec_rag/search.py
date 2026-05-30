@@ -358,7 +358,11 @@ class VaultSearcher:
         with self._gpu_lock if self._gpu_lock is not None else nullcontext():
             while True:
                 try:
-                    scores = reranker.predict(pairs, batch_size=batch_size)
+                    scores = reranker.predict(
+                        pairs,
+                        batch_size=batch_size,
+                        show_progress_bar=False,
+                    )
                     break
                 except torch.cuda.OutOfMemoryError:
                     torch.cuda.empty_cache()
