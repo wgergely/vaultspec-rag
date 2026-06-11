@@ -50,6 +50,16 @@ related:
   - '[[2026-06-10-preprocess-hooks-W06-P15-S43]]'
   - '[[2026-06-10-preprocess-hooks-W06-P15-S44]]'
   - '[[2026-06-10-preprocess-hooks-W06-P16-S45]]'
+  - '[[2026-06-10-preprocess-hooks-W07-P17-S46]]'
+  - '[[2026-06-10-preprocess-hooks-W07-P17-S47]]'
+  - '[[2026-06-10-preprocess-hooks-W07-P17-S48]]'
+  - '[[2026-06-10-preprocess-hooks-W07-P17-S49]]'
+  - '[[2026-06-10-preprocess-hooks-W07-P18-S50]]'
+  - '[[2026-06-10-preprocess-hooks-W07-P18-S51]]'
+  - '[[2026-06-10-preprocess-hooks-W07-P19-S52]]'
+  - '[[2026-06-10-preprocess-hooks-W07-P19-S53]]'
+  - '[[2026-06-10-preprocess-hooks-W07-P20-S54]]'
+  - '[[2026-06-10-preprocess-hooks-W07-P20-S55]]'
   - '[[2026-06-10-preprocess-hooks-adr]]'
   - '[[2026-06-10-preprocess-hooks-plan]]'
   - '[[2026-06-10-preprocess-hooks-research]]'
@@ -117,6 +127,16 @@ Auto-generated index of all documents tagged with `#preprocess-hooks`.
 - `2026-06-10-preprocess-hooks-W06-P15-S43` - Drive vaultspec-rag preprocess list/check/run-one against the toy project and capture output (D13)
 - `2026-06-10-preprocess-hooks-W06-P15-S44` - Index and search the toy project on real GPU, confirming anchors/locators and skip visibility (D11, D12)
 - `2026-06-10-preprocess-hooks-W06-P16-S45` - Run the pre-commit hook suite over the feature branch in a production-like pass and confirm green
+- `2026-06-10-preprocess-hooks-W07-P17-S46` - Add an out-of-process entry-point runner that imports module:callable and emits PreprocOutput JSON (D9 follow-up)
+- `2026-06-10-preprocess-hooks-W07-P17-S47` - Resolve entry_point rules in the loader instead of rejecting them (D9 follow-up)
+- `2026-06-10-preprocess-hooks-W07-P17-S48` - Dispatch entry_point rules through the subprocess runner (interpreter -m entry runner) with timeout (D9 follow-up)
+- `2026-06-10-preprocess-hooks-W07-P17-S49` - Add unit tests for entry_point success, bad reference, and timeout (D9 follow-up)
+- `2026-06-10-preprocess-hooks-W07-P18-S50` - Replace subprocess.run with a bounded Popen read capping captured stdout (PREPROCESS-003)
+- `2026-06-10-preprocess-hooks-W07-P18-S51` - Add a unit test that oversize stdout is bounded and skipped (PREPROCESS-003)
+- `2026-06-10-preprocess-hooks-W07-P19-S52` - Carry Locator.end through the chunk payload, CodeChunk, and result rendering (PREPROCESS-005)
+- `2026-06-10-preprocess-hooks-W07-P19-S53` - Add a unit test asserting a range locator end persists and renders (PREPROCESS-005)
+- `2026-06-10-preprocess-hooks-W07-P20-S54` - Use a per-process cache temp-file suffix and read/validate the top-level config version field (PREPROCESS-006, CONFIG-001)
+- `2026-06-10-preprocess-hooks-W07-P20-S55` - Add passthrough end-to-end and indexer-level cache version-bump coverage (TST-002, TST-003)
 
 ### plan
 

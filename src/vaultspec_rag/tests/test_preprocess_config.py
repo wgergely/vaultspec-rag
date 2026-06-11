@@ -117,7 +117,7 @@ def test_options_table_is_carried(tmp_path: Path) -> None:
     assert rule.options == {"sheet_limit": 5, "include_hidden": False}
 
 
-def test_entry_point_rule_is_dropped_in_v1(tmp_path: Path) -> None:
+def test_entry_point_rule_loads(tmp_path: Path) -> None:
     _write_config(
         tmp_path,
         """
@@ -127,8 +127,22 @@ def test_entry_point_rule_is_dropped_in_v1(tmp_path: Path) -> None:
         """,
     )
     config = load_preprocess_rules(tmp_path)
-    assert config.match("a.rst") is None
-    assert config.rules == []
+    rule = config.match("a.rst")
+    assert rule is not None
+    assert rule.entry_point == "myproj.pre:rst"
+    assert rule.command is None
+
+
+def test_malformed_entry_point_is_dropped(tmp_path: Path) -> None:
+    _write_config(
+        tmp_path,
+        """
+        [[rule]]
+        pattern = "*.rst"
+        entry_point = "no-colon"
+        """,
+    )
+    assert load_preprocess_rules(tmp_path).rules == []
 
 
 def test_rule_with_both_command_and_entry_point_is_dropped(tmp_path: Path) -> None:
@@ -200,6 +214,27 @@ def test_negative_timeout_is_rejected(tmp_path: Path) -> None:
         """,
     )
     assert load_preprocess_rules(tmp_path).rules == []
+
+
+def test_newer_config_version_degrades(tmp_path: Path) -> None:
+    _write_config(
+        tmp_path,
+        """
+        version = 99
+
+        [[rule]]
+        pattern = "*.pdf"
+        command = "c {path}"
+        """,
+    )
+    # A future config-schema version is not silently half-read (CONFIG-001).
+    assert load_preprocess_rules(tmp_path).rules == []
+
+
+def test_newer_config_version_strict_raises(tmp_path: Path) -> None:
+    _write_config(tmp_path, "version = 99\n")
+    with pytest.raises(PreprocessConfigError):
+        load_preprocess_rules(tmp_path, strict=True)
 
 
 def test_resolved_rule_is_picklable(tmp_path: Path) -> None:

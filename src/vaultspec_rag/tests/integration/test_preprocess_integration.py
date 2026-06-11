@@ -165,6 +165,88 @@ class TestPreprocessEndToEnd:
             store.close()
 
     @pytest.mark.timeout(600)
+    def test_passthrough_indexes_raw_text(
+        self, rag_components: RagComponentsWithManifest, tmp_path: Path
+    ) -> None:
+        # TST-002: a preprocess-matched file whose extractor fails under
+        # on_error=passthrough is chunked as raw text and stays searchable.
+        from ... import CodebaseIndexer, VaultSearcher, VaultStore
+
+        model = rag_components["model"]
+        script = tmp_path / "boom.py"
+        script.write_text(_FAILING_EXTRACTOR, encoding="utf-8")
+        _write_config(
+            tmp_path,
+            f"[[rule]]\npattern = \"*.log\"\ncommand = '''{_command(script)}'''\n"
+            'on_error = "passthrough"\n',
+        )
+        # .log is not a supported extension; the rule match admits it, and
+        # passthrough then chunks the raw text.
+        (tmp_path / "notes.log").write_text(
+            "passthrough sentinel phrase about quarterly logistics", encoding="utf-8"
+        )
+
+        store = VaultStore(tmp_path)
+        try:
+            indexer = CodebaseIndexer(tmp_path, model, store)
+            indexer.full_index(reporter=NullProgressReporter())
+            searcher = VaultSearcher(tmp_path, model, store)
+            results = searcher.search_codebase(
+                "passthrough sentinel logistics", top_k=5
+            )
+            hit = next((r for r in results if "notes.log" in r.path), None)
+            assert hit is not None, "passthrough raw text not indexed"
+            assert hit.preprocessor_id is None  # raw chunk, not a preproc unit
+        finally:
+            store.close()
+
+    @pytest.mark.timeout(600)
+    def test_command_change_reextracts(
+        self, rag_components: RagComponentsWithManifest, tmp_path: Path
+    ) -> None:
+        # TST-003: bumping a rule's command (the cache lever) re-extracts the
+        # same unchanged source rather than serving stale cached output.
+        from ... import CodebaseIndexer, VaultSearcher, VaultStore
+
+        model = rag_components["model"]
+
+        def _emit(token: str) -> Path:
+            s = tmp_path / f"extract_{token}.py"
+            s.write_text(
+                "import json, sys\n"
+                "print(json.dumps({'schema_version': 1, 'preprocessor_id': 'v',\n"
+                f"  'preprocessor_version': '{token}', 'source_path': sys.argv[1],\n"
+                f"  'units': [{{'text': 'unique token {token} content'}}]}}))\n",
+                encoding="utf-8",
+            )
+            return s
+
+        source = tmp_path / "doc.pdf"
+        source.write_bytes(b"\x00\x01binary")
+
+        def _config(command: str) -> str:
+            return f"[[rule]]\npattern = \"*.pdf\"\ncommand = '''{command}'''\n"
+
+        store = VaultStore(tmp_path)
+        try:
+            _write_config(tmp_path, _config(_command(_emit("alpha"))))
+            indexer = CodebaseIndexer(tmp_path, model, store)
+            indexer.full_index(reporter=NullProgressReporter())
+            searcher = VaultSearcher(tmp_path, model, store)
+            assert any(
+                "alpha" in r.snippet
+                for r in searcher.search_codebase("unique token alpha", top_k=5)
+            )
+
+            # Bump the command -> new cache key -> re-extract on clean rebuild.
+            _write_config(tmp_path, _config(_command(_emit("beta"))))
+            indexer.full_index(clean=True, reporter=NullProgressReporter())
+            beta = searcher.search_codebase("unique token beta", top_k=5)
+            assert any("beta" in r.snippet for r in beta)
+        finally:
+            store.close()
+
+    @pytest.mark.timeout(600)
     def test_incremental_surfaces_skip_count(
         self, rag_components: RagComponentsWithManifest, tmp_path: Path
     ) -> None:

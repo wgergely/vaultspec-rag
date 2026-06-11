@@ -151,7 +151,9 @@ def write_cached_output(
     }
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = path.with_suffix(".tmp")
+        # Per-process temp suffix so two workers writing byte-identical sources
+        # (same cache key) never collide on one temp file (review PREPROCESS-006).
+        tmp_path = path.with_suffix(f".{os.getpid()}.tmp")
         tmp_path.write_text(json.dumps(entry), encoding="utf-8")
         os.replace(tmp_path, path)
     except OSError as exc:

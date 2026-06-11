@@ -49,6 +49,11 @@ __all__ = [
 #: The per-root config filename, a sibling of ``.vaultragignore``.
 PREPROCESS_CONFIG_FILENAME = ".vaultragpreprocess.toml"
 
+#: The config-schema major this loader understands. A file declaring a higher
+#: top-level ``version`` is rejected (degrade in the default mode) so a future
+#: incompatible config shape is never silently half-read (review CONFIG-001).
+SUPPORTED_CONFIG_VERSION = 1
+
 #: Default rule priority when a rule omits ``priority``. Lower sorts first
 #: (higher precedence); the shared default makes file order the tie-breaker.
 _DEFAULT_PRIORITY = 100
@@ -78,10 +83,10 @@ class PreprocessRule:
     Attributes:
         pattern: The gitignore-style glob this rule matched on.
         command: The subprocess command template with a ``{path}``
-            placeholder. Exactly one of ``command``/``entry_point`` is set;
-            in v1 only ``command`` rules survive loading (D9).
-        entry_point: A ``"module:callable"`` reference. Parsed but not yet
-            executable in v1; rules carrying it are dropped at load time.
+            placeholder. Exactly one of ``command``/``entry_point`` is set.
+        entry_point: A ``"module:callable"`` reference, executed out-of-process
+            by the runner (the safe form of D9). Exactly one of
+            ``command``/``entry_point`` is set.
         priority: Lower sorts first (higher precedence).
         on_error: Disposition when preprocessing fails: ``skip`` (drop the
             file), ``fail`` (abort the index run), or ``passthrough`` (index
@@ -222,6 +227,25 @@ def load_preprocess_rules(
         logger.warning("%s; ignoring preprocess rules", message)
         return PreprocessConfig([])
 
+    version = data.get("version", SUPPORTED_CONFIG_VERSION)
+    if not isinstance(version, int) or isinstance(version, bool):
+        message = (
+            f"{PREPROCESS_CONFIG_FILENAME}: top-level 'version' must be an integer"
+        )
+        if strict:
+            raise PreprocessConfigError(message)
+        logger.warning("%s; ignoring preprocess rules", message)
+        return PreprocessConfig([])
+    if version > SUPPORTED_CONFIG_VERSION:
+        message = (
+            f"{PREPROCESS_CONFIG_FILENAME}: config version {version} is newer than "
+            f"supported ({SUPPORTED_CONFIG_VERSION}); upgrade vaultspec-rag"
+        )
+        if strict:
+            raise PreprocessConfigError(message)
+        logger.warning("%s; ignoring preprocess rules", message)
+        return PreprocessConfig([])
+
     raw_rules = data.get("rule", [])
     if not isinstance(raw_rules, list):
         message = f"{PREPROCESS_CONFIG_FILENAME}: 'rule' must be an array of tables"
@@ -253,8 +277,8 @@ def _resolve_rule(
     Returns ``None`` (after a warning) for an invalid rule in non-strict mode;
     raises :class:`PreprocessConfigError` in strict mode. The validation rules
     are D1/D3: ``pattern`` is required; exactly one of ``command``/
-    ``entry_point``; ``on_error`` is one of the known values; and ``entry_point``
-    is rejected as not-yet-supported in v1 (D9).
+    ``entry_point``; ``on_error`` is one of the known values; and an
+    ``entry_point`` must be a ``"module:callable"`` reference.
     """
 
     def _reject(reason: str) -> _RuleRejectedError:
@@ -284,7 +308,7 @@ def _build_rule(
     if not isinstance(pattern, str) or not pattern:
         raise reject("missing or non-string 'pattern'")
 
-    command = _resolve_command(rule_map, reject)
+    command, entry_point = _resolve_invocation(rule_map, reject)
     on_error = _resolve_on_error(rule_map, reject)
     priority = _resolve_priority(rule_map, reject)
     timeout_s = _resolve_timeout(rule_map, reject)
@@ -297,7 +321,7 @@ def _build_rule(
     return PreprocessRule(
         pattern=pattern,
         command=command,
-        entry_point=None,
+        entry_point=entry_point,
         priority=priority,
         on_error=on_error,
         timeout_s=timeout_s,
@@ -306,24 +330,30 @@ def _build_rule(
     )
 
 
-def _resolve_command(
+def _resolve_invocation(
     rule_map: dict[str, object],
     reject: Callable[[str], _RuleRejectedError],
-) -> str:
-    """Resolve and validate the command/entry_point XOR (command-only in v1)."""
+) -> tuple[str | None, str | None]:
+    """Resolve the command/entry_point XOR, returning ``(command, entry_point)``.
+
+    Exactly one is non-``None``. ``entry_point`` must be a ``"module:callable"``
+    reference; it is executed out-of-process by the runner (#185 follow-up), so
+    it is no longer rejected at load time.
+    """
     command_raw = rule_map.get("command")
     entry_raw = rule_map.get("entry_point")
     if (command_raw is None) == (entry_raw is None):
         raise reject("rule must set exactly one of 'command' or 'entry_point'")
-    if entry_raw is not None:
-        if not isinstance(entry_raw, str) or not entry_raw:
-            raise reject("'entry_point' must be a non-empty string")
-        raise reject(
-            "'entry_point' rules are not supported in this version (command-only)"
-        )
-    if not isinstance(command_raw, str) or not command_raw:
-        raise reject("'command' must be a non-empty string")
-    return command_raw
+    if command_raw is not None:
+        if not isinstance(command_raw, str) or not command_raw:
+            raise reject("'command' must be a non-empty string")
+        return command_raw, None
+    if not isinstance(entry_raw, str) or not entry_raw:
+        raise reject("'entry_point' must be a non-empty string")
+    module, sep, attr = entry_raw.partition(":")
+    if not sep or not module or not attr:
+        raise reject("'entry_point' must be of the form 'module:callable'")
+    return None, entry_raw
 
 
 def _resolve_on_error(

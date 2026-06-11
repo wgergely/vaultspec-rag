@@ -77,6 +77,20 @@ class _PreprocessOutcome:
     reason: str | None
 
 
+def _split_locator_value(value: int | str | None) -> tuple[int | None, str | None]:
+    """Split a polymorphic locator value into typed (int, str) payload fields.
+
+    ``bool`` is treated as a string so it never lands in the INTEGER field.
+    """
+    if isinstance(value, bool):
+        return None, str(value)
+    if isinstance(value, int):
+        return value, None
+    if isinstance(value, str):
+        return None, value
+    return None, None
+
+
 def _chunks_from_output(output: PreprocOutput, rel_path: str) -> list[CodeChunk]:
     """Build ``CodeChunk``s from validated preprocessor output (D6, D12).
 
@@ -90,15 +104,12 @@ def _chunks_from_output(output: PreprocOutput, rel_path: str) -> list[CodeChunk]
         for index, unit in enumerate(output.units):
             locator = unit.locator
             locator_kind = locator.kind if locator is not None else None
-            value_int: int | None = None
-            value_str: str | None = None
-            if locator is not None:
-                if isinstance(locator.value, bool):
-                    value_str = str(locator.value)
-                elif isinstance(locator.value, int):
-                    value_int = locator.value
-                else:
-                    value_str = str(locator.value)
+            value_int, value_str = _split_locator_value(
+                locator.value if locator is not None else None
+            )
+            end_int, end_str = _split_locator_value(
+                locator.end if locator is not None else None
+            )
             chunk_hash = hashlib.blake2b(
                 unit.text.encode("utf-8"),
                 digest_size=6,
@@ -117,6 +128,8 @@ def _chunks_from_output(output: PreprocOutput, rel_path: str) -> list[CodeChunk]
                     locator_kind=locator_kind,
                     locator_value_int=value_int,
                     locator_value_str=value_str,
+                    locator_end_int=end_int,
+                    locator_end_str=end_str,
                     vector=[],
                 ),
             )
@@ -148,16 +161,19 @@ def preprocess_file(
     """
     rel_path = str(path.relative_to(root_dir)).replace("\\", "/")
     rule = prep.config.match(rel_path)
-    if rule is None or rule.command is None:
+    if rule is None or (rule.command is None and rule.entry_point is None):
         return _PreprocessOutcome("none", [], None)
 
-    cached = read_cached_output(prep.cache_root, content_hash, rule.command)
+    # Cache token identifies the invocation (command or entry_point) so a
+    # version bump via either lever invalidates exactly its own files (D7).
+    cache_token = rule.command or rule.entry_point or ""
+    cached = read_cached_output(prep.cache_root, content_hash, cache_token)
     if cached is not None:
         return _PreprocessOutcome("ok", _chunks_from_output(cached, rel_path), None)
 
     result = run_preprocessor(path, rule, max_emitted_bytes=prep.max_emitted_bytes)
     if result.status == "ok" and result.output is not None:
-        write_cached_output(prep.cache_root, content_hash, rule.command, result.output)
+        write_cached_output(prep.cache_root, content_hash, cache_token, result.output)
         return _PreprocessOutcome(
             "ok",
             _chunks_from_output(result.output, rel_path),

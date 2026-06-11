@@ -160,6 +160,40 @@ Run the repository pre-commit hook suite over the feature branch in a production
 
 - [x] `W06.P16.S45` - Run the pre-commit hook suite over the feature branch in a production-like pass and confirm green; `.pre-commit-config.yaml (manual)`.
 
+## Wave `W07` - follow-up hardening (deferred items pulled into scope)
+
+Closes the deferred/accepted items from the code review and ADR: out-of-process entry_point support (the safe form of D9), a bounded subprocess stdout read (PREPROCESS-003), range-locator end surfacing (PREPROCESS-005), and the small robustness/coverage tidies (cache temp-suffix PREPROCESS-006, config version-field CONFIG-001, passthrough and version-bump coverage TST-002/003). The dedicated preproc_docs collection item (original ADR D12) is resolved by decision to keep the reviewer-confirmed codebase_docs approach; no rebuild. Depends on W01-W06 having landed.
+
+### Phase `W07.P17` - out-of-process entry_point support
+
+Ship the entry_point rule form by invoking module:callable in a dedicated subprocess so CPU-only isolation and timeout hold by construction, reusing the command validate/cap path (D9 follow-up, codification candidate preprocessors-run-out-of-process).
+
+- [x] `W07.P17.S46` - Add an out-of-process entry-point runner that imports module:callable and emits PreprocOutput JSON (D9 follow-up); `src/vaultspec_rag/indexer/_preprocess_entry.py`.
+- [x] `W07.P17.S47` - Resolve entry_point rules in the loader instead of rejecting them (D9 follow-up); `src/vaultspec_rag/indexer/_preprocess_config.py`.
+- [x] `W07.P17.S48` - Dispatch entry_point rules through the subprocess runner (interpreter -m entry runner) with timeout (D9 follow-up); `src/vaultspec_rag/indexer/_preprocess_runner.py`.
+- [x] `W07.P17.S49` - Add unit tests for entry_point success, bad reference, and timeout (D9 follow-up); `src/vaultspec_rag/tests/test_preprocess_entry.py`.
+
+### Phase `W07.P18` - bounded subprocess stdout read
+
+Cap the preprocessor's stdout capture so a runaway extractor cannot spike memory before the emitted-size cap fires (PREPROCESS-003).
+
+- [x] `W07.P18.S50` - Replace subprocess.run with a bounded Popen read capping captured stdout (PREPROCESS-003); `src/vaultspec_rag/indexer/_preprocess_runner.py`.
+- [x] `W07.P18.S51` - Add a unit test that oversize stdout is bounded and skipped (PREPROCESS-003); `src/vaultspec_rag/tests/test_preprocess_runner.py`.
+
+### Phase `W07.P19` - range-locator end surfacing
+
+Carry the validated Locator.end through payload, chunk, and rendering so range locators are not silently dropped (PREPROCESS-005).
+
+- [x] `W07.P19.S52` - Carry Locator.end through the chunk payload, CodeChunk, and result rendering (PREPROCESS-005); `src/vaultspec_rag/indexer/_chunk_worker.py`.
+- [x] `W07.P19.S53` - Add a unit test asserting a range locator end persists and renders (PREPROCESS-005); `src/vaultspec_rag/tests/test_preprocess_store.py`.
+
+### Phase `W07.P20` - robustness and coverage tidies
+
+Per-process cache temp-suffix (PREPROCESS-006), read/validate the top-level config version field (CONFIG-001), and add passthrough end-to-end and indexer-level version-bump coverage (TST-002/003).
+
+- [x] `W07.P20.S54` - Use a per-process cache temp-file suffix and read/validate the top-level config version field (PREPROCESS-006, CONFIG-001); `src/vaultspec_rag/indexer/_preprocess_cache.py`.
+- [x] `W07.P20.S55` - Add passthrough end-to-end and indexer-level cache version-bump coverage (TST-002, TST-003); `src/vaultspec_rag/tests/integration/test_preprocess_integration.py`.
+
 ## Description
 
 This plan implements the generic document-preprocessing hook infrastructure decided in

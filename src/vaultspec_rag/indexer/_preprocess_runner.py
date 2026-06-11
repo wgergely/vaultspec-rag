@@ -20,8 +20,10 @@ import json
 import logging
 import shlex
 import subprocess
+import sys
+import threading
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import IO, TYPE_CHECKING, Literal
 
 from pydantic import ValidationError
 
@@ -37,6 +39,17 @@ if TYPE_CHECKING:
     from ._preprocess_config import PreprocessRule
 
 logger = logging.getLogger(__name__)
+
+#: Module path of the out-of-process entry-point runner (#185 follow-up).
+_ENTRY_RUNNER_MODULE = "vaultspec_rag.indexer._preprocess_entry"
+
+#: Raw stdout is captured up to this multiple of the emitted-text cap, leaving
+#: headroom for JSON structure while bounding peak memory so a runaway extractor
+#: cannot OOM the worker before the emitted-size cap fires (review PREPROCESS-003).
+_STDOUT_CAP_MULTIPLIER = 4
+_MIN_STDOUT_CAP = 1024 * 1024
+#: Hard ceiling on captured stderr so a flooding child cannot OOM us either.
+_STDERR_CAP = 64 * 1024
 
 __all__ = [
     "PreprocessAbortError",
@@ -87,10 +100,94 @@ def _emitted_text_length(output: PreprocOutput) -> int:
     return 0
 
 
-def _build_argv(command: str, source_path: pathlib.Path) -> list[str]:
-    """Split the command template and substitute ``{path}`` token-wise."""
-    tokens = shlex.split(command, posix=True)
-    return [token.replace("{path}", str(source_path)) for token in tokens]
+def _build_argv(rule: PreprocessRule, source_path: pathlib.Path) -> list[str]:
+    """Build the subprocess argv for a rule (command or entry_point form).
+
+    A ``command`` rule is shell-split with ``{path}`` substituted token-wise
+    (never via a shell). An ``entry_point`` rule is invoked as the current
+    interpreter running the out-of-process entry runner, so it shares the exact
+    same isolation and timeout guarantees as the command form (#185 follow-up).
+    """
+    if rule.entry_point is not None:
+        return [
+            sys.executable,
+            "-m",
+            _ENTRY_RUNNER_MODULE,
+            rule.entry_point,
+            str(source_path),
+        ]
+    if rule.command is not None:
+        tokens = shlex.split(rule.command, posix=True)
+        return [token.replace("{path}", str(source_path)) for token in tokens]
+    return []
+
+
+def _run_bounded(
+    argv: list[str],
+    timeout_s: float | None,
+    stdout_cap: int,
+) -> tuple[int, bytes, str]:
+    """Run ``argv``, capturing stdout up to ``stdout_cap`` bytes and bounded stderr.
+
+    Reads both pipes on dedicated threads (deadlock-free) but stops *storing*
+    stdout past the cap, so a runaway extractor cannot spike memory before the
+    emitted-size cap fires (review PREPROCESS-003). The wall-clock ``timeout_s``
+    still bounds a child that keeps producing output.
+
+    Returns ``(returncode, stdout_bytes, stderr_text)``; ``stdout_bytes`` is at
+    most ``stdout_cap + 1`` so the caller can detect truncation.
+
+    Raises:
+        _PreprocessSkipError: On launch failure or timeout.
+    """
+    try:
+        proc = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError as exc:
+        msg = f"preprocessor could not be launched: {exc}"
+        raise _PreprocessSkipError(msg) from exc
+
+    captured: dict[str, bytes] = {"stdout": b"", "stderr": b""}
+
+    def _drain_stdout(pipe: IO[bytes]) -> None:
+        buf = bytearray()
+        while True:
+            chunk = pipe.read(65536)
+            if not chunk:
+                break
+            if len(buf) <= stdout_cap:
+                buf += chunk  # store until just past the cap, then discard
+        captured["stdout"] = bytes(buf[: stdout_cap + 1])
+
+    def _drain_stderr(pipe: IO[bytes]) -> None:
+        captured["stderr"] = pipe.read(_STDERR_CAP)
+        while pipe.read(65536):
+            pass
+
+    if proc.stdout is None or proc.stderr is None:  # pragma: no cover - PIPE set
+        proc.kill()
+        msg = "preprocessor pipes unavailable"
+        raise _PreprocessSkipError(msg)
+    t_out = threading.Thread(target=_drain_stdout, args=(proc.stdout,))
+    t_err = threading.Thread(target=_drain_stderr, args=(proc.stderr,))
+    t_out.start()
+    t_err.start()
+    try:
+        proc.wait(timeout=timeout_s)
+    except subprocess.TimeoutExpired as exc:
+        proc.kill()
+        proc.wait()
+        t_out.join(timeout=5)
+        t_err.join(timeout=5)
+        msg = f"preprocessor timed out after {timeout_s}s"
+        raise _PreprocessSkipError(msg) from exc
+    t_out.join(timeout=5)
+    t_err.join(timeout=5)
+    stderr_text = captured["stderr"].decode("utf-8", errors="replace").strip()
+    return proc.returncode, captured["stdout"], stderr_text
 
 
 def _invoke_and_validate(
@@ -98,43 +195,31 @@ def _invoke_and_validate(
     rule: PreprocessRule,
     max_emitted_bytes: int,
 ) -> PreprocOutput:
-    """Run the command, parse stdout, validate, and enforce the size cap.
+    """Run the preprocessor, parse stdout, validate, and enforce the size caps.
 
     Raises:
-        _PreprocessSkipError: On any recoverable per-file failure (the command
-            is misconfigured, exits non-zero, times out, emits non-JSON or
-            schema-invalid output, or exceeds the emitted-text cap).
+        _PreprocessSkipError: On any recoverable per-file failure (misconfigured
+            rule, non-zero exit, timeout, oversize stdout, non-JSON or
+            schema-invalid output, or emitted text over the cap).
     """
-    if rule.command is None:  # pragma: no cover - guaranteed by loader (D9)
-        msg = "rule has no command"
-        raise _PreprocessSkipError(msg)
-
-    argv = _build_argv(rule.command, source_path)
+    argv = _build_argv(rule, source_path)
     if not argv:
-        msg = "command template is empty after splitting"
+        msg = "rule has neither a runnable command nor entry_point"
+        raise _PreprocessSkipError(msg)
+
+    stdout_cap = max(max_emitted_bytes * _STDOUT_CAP_MULTIPLIER, _MIN_STDOUT_CAP)
+    returncode, stdout, stderr = _run_bounded(argv, rule.timeout_s, stdout_cap)
+
+    if len(stdout) > stdout_cap:
+        msg = f"preprocessor stdout exceeds {stdout_cap} bytes; skipping"
+        raise _PreprocessSkipError(msg)
+
+    if returncode != 0:
+        msg = f"preprocessor exited {returncode}: {stderr[:500]}"
         raise _PreprocessSkipError(msg)
 
     try:
-        completed = subprocess.run(
-            argv,
-            capture_output=True,
-            timeout=rule.timeout_s,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        msg = f"preprocessor timed out after {rule.timeout_s}s"
-        raise _PreprocessSkipError(msg) from exc
-    except OSError as exc:
-        msg = f"preprocessor could not be launched: {exc}"
-        raise _PreprocessSkipError(msg) from exc
-
-    if completed.returncode != 0:
-        stderr = completed.stderr.decode("utf-8", errors="replace").strip()
-        msg = f"preprocessor exited {completed.returncode}: {stderr[:500]}"
-        raise _PreprocessSkipError(msg)
-
-    try:
-        payload = json.loads(completed.stdout.decode("utf-8"))
+        payload = json.loads(stdout.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         msg = f"preprocessor stdout is not valid JSON: {exc}"
         raise _PreprocessSkipError(msg) from exc

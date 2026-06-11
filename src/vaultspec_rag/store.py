@@ -245,6 +245,8 @@ class CodeChunk:
         locator_kind: The locator kind (``page``/``sheet``/``line``/...), if any.
         locator_value_int: Numeric locator value (page/line/byte/char), if any.
         locator_value_str: String locator value (e.g. a sheet name), if any.
+        locator_end_int: Numeric end of a range locator (e.g. pages 1-3), if any.
+        locator_end_str: String end of a range locator, if any.
     """
 
     id: str
@@ -265,6 +267,8 @@ class CodeChunk:
     locator_kind: str | None = None
     locator_value_int: int | None = None
     locator_value_str: str | None = None
+    locator_end_int: int | None = None
+    locator_end_str: str | None = None
 
 
 class VaultStore:
@@ -625,6 +629,8 @@ class VaultStore:
                         "locator_kind": chunk.locator_kind,
                         "locator_value_int": chunk.locator_value_int,
                         "locator_value_str": chunk.locator_value_str,
+                        "locator_end_int": chunk.locator_end_int,
+                        "locator_end_str": chunk.locator_end_str,
                     },
                 ),
             )

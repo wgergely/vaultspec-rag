@@ -50,10 +50,16 @@ Rule fields:
 
 - **`pattern`** (required) - one gitignore-style glob. Add more `[[rule]]` tables for more
   patterns.
-- **`command`** (required) - a command template. `{path}` is substituted with the source
-  file path. The command is split with shell-style tokenisation and run **without** a
-  shell, so spaces and metacharacters in paths cannot inject. On Windows, prefer forward
-  slashes or a TOML literal string (`'''...'''`) so backslashes are not read as escapes.
+- **One of `command` or `entry_point`** (required, exactly one):
+  - `command` is a command template. `{path}` is substituted with the source file path.
+    The command is split with shell-style tokenisation and run **without** a shell, so
+    spaces and metacharacters in paths cannot inject. On Windows, **use forward slashes**
+    in the interpreter/script path (a backslash path breaks the POSIX-style tokeniser even
+    inside a TOML literal).
+  - `entry_point` is a `"module:callable"` reference. The callable
+    (`def my_callable(source_path: str) -> Mapping | BaseModel`) is run **out-of-process**
+    by vaultspec-rag (same isolation and `timeout_s` bound as `command`); the module must
+    be importable in the service's Python environment.
 - **`priority`** (optional, default 100) - lower sorts first; ties break by file order.
   The first matching rule wins.
 - **`on_error`** (optional, default `skip`):
@@ -65,9 +71,10 @@ Rule fields:
 - **`[rule.options]`** (optional) - an opaque table forwarded to your preprocessor for its
   own use.
 
-> **Note.** v1 supports the `command` form only. An in-process Python `entry_point` form is
-> parsed but rejected at load time (it cannot be sandboxed or timed out in the indexer's
-> worker); it is planned for a follow-up.
+> **Note.** Both `command` and `entry_point` rules run out-of-process (a subprocess), so
+> they share the same CPU-only isolation and `timeout_s` bound. An `entry_point` callable
+> must be importable in the service's environment and return a mapping (or pydantic model)
+> shaped like the output schema below.
 
 Inspect and validate your configuration:
 
@@ -150,9 +157,11 @@ large PDF that distils to a few kilobytes indexes fine.
 
 Preprocessors are arbitrary project code executed by the indexing service. They run
 **only** when declared in the project-root `.vaultragpreprocess.toml` - the same trust
-model as the project's own code and build scripts. Each `command` runs in a separate OS
-process (a subprocess), so it cannot touch the indexer's GPU or interpreter state, and
-`timeout_s` bounds runaway extractors. Treat `.vaultragpreprocess.toml` as you would any
+model as the project's own code and build scripts. Each preprocessor (both `command` and
+`entry_point`) runs in a separate OS process, so it cannot touch the indexer's GPU or
+interpreter state, and `timeout_s` bounds runaway extractors. The captured output is also
+size-bounded so a runaway extractor cannot exhaust memory. Treat `.vaultragpreprocess.toml`
+as you would any
 executable project configuration: review it in code review, and do not point it at
 untrusted commands.
 

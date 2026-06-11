@@ -51,13 +51,26 @@ def _format_locator(payload: dict[str, object]) -> str | None:
     kind = payload.get("locator_kind")
     if not isinstance(kind, str) or not kind:
         return None
-    value_int = payload.get("locator_value_int")
+    value = _locator_component(payload, "locator_value_int", "locator_value_str")
+    if value is None:
+        return kind
+    end = _locator_component(payload, "locator_end_int", "locator_end_str")
+    if end is not None:
+        return f"{kind} {value}-{end}"
+    return f"{kind} {value}"
+
+
+def _locator_component(
+    payload: dict[str, object], int_key: str, str_key: str
+) -> str | None:
+    """Return the int or str locator component as a display string, or None."""
+    value_int = payload.get(int_key)
     if isinstance(value_int, int) and not isinstance(value_int, bool):
-        return f"{kind} {value_int}"
-    value_str = payload.get("locator_value_str")
+        return str(value_int)
+    value_str = payload.get(str_key)
     if isinstance(value_str, str) and value_str:
-        return f"{kind} {value_str}"
-    return kind
+        return value_str
+    return None
 
 
 class VaultGraphError(RuntimeError):

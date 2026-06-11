@@ -129,6 +129,20 @@ def test_purge_by_source_path(store: VaultStore) -> None:
     assert set(ids) == {"docs/report.pdf::pp:0:a", "docs/report.pdf::pp:1:b"}
 
 
+def test_range_locator_end_persists(store: VaultStore) -> None:
+    chunk = _preproc_chunk(
+        "doc.txt::pp:0:r",
+        anchor="doc.txt#L10-20",
+        locator_kind="line",
+        value_int=10,
+    )
+    chunk.locator_end_int = 20
+    store.upsert_code_chunks([chunk])
+    p = _scroll_payloads(store)[0]
+    assert p["locator_value_int"] == 10
+    assert p["locator_end_int"] == 20
+
+
 def test_ordinary_code_chunk_has_null_preproc_fields(store: VaultStore) -> None:
     store.upsert_code_chunks(
         [
