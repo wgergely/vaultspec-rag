@@ -33,6 +33,7 @@ from ._chunking import (
     SUPPORTED_EXTENSIONS,
     _is_binary,
 )
+from ._preprocess_cache import clear_preprocess_cache, preprocess_cache_dir
 from ._preprocess_config import PreprocessConfig, load_preprocess_rules
 from ._streaming import (
     _stream_encode_and_upsert_codebase,
@@ -109,7 +110,8 @@ class CodebaseIndexer:
         from ..config import get_config
 
         cfg = get_config()
-        self._meta_path = root_dir / cfg.data_dir / cfg.code_index_metadata_file
+        self._data_root = root_dir / cfg.data_dir
+        self._meta_path = self._data_root / cfg.code_index_metadata_file
 
     @staticmethod
     def _get_language(path: pathlib.Path) -> str:
@@ -229,6 +231,10 @@ class CodebaseIndexer:
             The resolved :class:`PreprocessConfig` (empty when no rules apply).
         """
         return load_preprocess_rules(self.root_dir)
+
+    def _clear_preprocess_cache(self) -> None:
+        """Remove the preprocess output cache subtree for a clean rebuild (D7)."""
+        clear_preprocess_cache(preprocess_cache_dir(self._data_root))
 
     def _scan_codebase(self) -> list[pathlib.Path]:
         """Scan codebase for supported source files.
@@ -912,6 +918,7 @@ class CodebaseIndexer:
         try:
             if clean:
                 self.store.drop_code_table()
+                self._clear_preprocess_cache()
             self.store.ensure_code_table()
             try:
                 existing_ids_before: set[str] = set(self.store.get_all_code_ids())

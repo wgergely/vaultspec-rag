@@ -16,6 +16,19 @@ related:
 
 ## Description
 
+Added `_preprocess_cache.py`: content-addressed cache of successful outputs under
+`<data_dir>/preprocess-cache/<shard>/<key>.json`. The key is
+`blake2b(source_hash | command | schema_version)`; `read_cached_output` returns the
+re-validated `PreprocOutput` on a hit and treats any corrupt/collided entry as a miss;
+`write_cached_output` writes atomically (tmp + `os.replace`) and swallows write errors (the
+cache is an optimisation, never a correctness dependency). Only `ok` results are cached, so
+transient failures retry (D7).
+
 ## Outcome
 
+Module complete; ruff + basedpyright zero. Per-source sharded files avoid a manifest
+bottleneck across parallel workers.
+
 ## Notes
+
+Command is the project's invalidation lever; source-hash is the dominant signal.

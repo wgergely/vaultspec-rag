@@ -38,17 +38,17 @@ Make a command-form rule actually execute against one file and cache its output 
 
 Run a matched command rule against one file, parse and validate stdout JSON, enforce timeout and emitted-size cap and on_error (D6, D9, D10).
 
-- [ ] `W02.P03.S06` - Implement the command runner: path substitution, subprocess.run timeout, stdout JSON parse, and on_error semantics (D6, D9); `src/vaultspec_rag/indexer/_preprocess_runner.py`.
-- [ ] `W02.P03.S07` - Add the preprocess_max_emitted_bytes config knob and enforce the emitted-text cap in the runner (D10); `src/vaultspec_rag/config.py`.
-- [ ] `W02.P03.S08` - Add unit tests with a real echo-to-JSON script fixture: success, timeout, nonzero-exit, oversize, bad-json (D6, D9, D10); `src/vaultspec_rag/tests/test_preprocess_runner.py`.
+- [x] `W02.P03.S06` - Implement the command runner: path substitution, subprocess.run timeout, stdout JSON parse, and on_error semantics (D6, D9); `src/vaultspec_rag/indexer/_preprocess_runner.py`.
+- [x] `W02.P03.S07` - Add the preprocess_max_emitted_bytes config knob and enforce the emitted-text cap in the runner (D10); `src/vaultspec_rag/config.py`.
+- [x] `W02.P03.S08` - Add unit tests with a real echo-to-JSON script fixture: success, timeout, nonzero-exit, oversize, bad-json (D6, D9, D10); `src/vaultspec_rag/tests/test_preprocess_runner.py`.
 
 ### Phase `W02.P04` - preprocess cache
 
 Cache validated output per source under the data dir keyed on content+id+version+schema, with clean-rebuild semantics (D7).
 
-- [ ] `W02.P04.S09` - Implement the preprocess cache: key composition, sharded per-source JSON, atomic tmp-plus-replace write (D7); `src/vaultspec_rag/indexer/_preprocess_cache.py`.
-- [ ] `W02.P04.S10` - Wire clean rebuild rmtree of the cache subtree into the codebase indexer clean path (D7); `src/vaultspec_rag/indexer/_codebase_indexer.py`.
-- [ ] `W02.P04.S11` - Add unit tests for cache hit/miss, version-bump invalidation, and clean rebuild (D7); `src/vaultspec_rag/tests/test_preprocess_cache.py`.
+- [x] `W02.P04.S09` - Implement the preprocess cache: key composition, sharded per-source JSON, atomic tmp-plus-replace write (D7); `src/vaultspec_rag/indexer/_preprocess_cache.py`.
+- [x] `W02.P04.S10` - Wire clean rebuild rmtree of the cache subtree into the codebase indexer clean path (D7); `src/vaultspec_rag/indexer/_codebase_indexer.py`.
+- [x] `W02.P04.S11` - Add unit tests for cache hit/miss, version-bump invalidation, and clean rebuild (D7); `src/vaultspec_rag/tests/test_preprocess_cache.py`.
 
 ## Wave `W03` - indexing integration - wire into the pipeline
 

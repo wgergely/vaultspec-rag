@@ -16,6 +16,15 @@ related:
 
 ## Description
 
+Added `test_preprocess_cache.py`: 7 tests over real `tmp_path` cache files - empty miss,
+write-then-hit, different-source-hash miss, command-change (version-bump) invalidation,
+corrupt-entry tolerance (treated as miss), clean-rebuild clearing plus already-absent
+no-op, and a units+locator round-trip (D7).
+
 ## Outcome
 
+7/7 pass; ruff clean. Covers hit/miss, invalidation, and clear acceptance points.
+
 ## Notes
+
+Command-change test demonstrates the documented version-bump lever.
