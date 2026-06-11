@@ -19,16 +19,16 @@ Establish the config and schema contracts (D1-D5) that every later Wave consumes
 
 Load and resolve .vaultragpreprocess.toml into ordered, compiled rules per-root with the documented error policy (D1, D2, D3).
 
-- [ ] `W01.P01.S01` - Implement the preprocess rule dataclass, tomllib loader, pathspec compilation, determinism sort, and error policy (D1, D2, D3); `src/vaultspec_rag/indexer/_preprocess_config.py`.
-- [ ] `W01.P01.S02` - Resolve rules per-root via a new \_build_preprocess_rules() in the codebase indexer (D1, D2); `src/vaultspec_rag/indexer/_codebase_indexer.py`.
-- [ ] `W01.P01.S03` - Add unit tests for loading, ordering, ignore-composition, and error policy with real toml fixtures (D1, D2, D3); `src/vaultspec_rag/tests/test_preprocess_config.py`.
+- [x] `W01.P01.S01` - Implement the preprocess rule dataclass, tomllib loader, pathspec compilation, determinism sort, and error policy (D1, D2, D3); `src/vaultspec_rag/indexer/_preprocess_config.py`.
+- [x] `W01.P01.S02` - Resolve rules per-root via a new \_build_preprocess_rules() in the codebase indexer (D1, D2); `src/vaultspec_rag/indexer/_codebase_indexer.py`.
+- [x] `W01.P01.S03` - Add unit tests for loading, ordering, ignore-composition, and error policy with real toml fixtures (D1, D2, D3); `src/vaultspec_rag/tests/test_preprocess_config.py`.
 
 ### Phase `W01.P02` - output schema
 
 Define and validate the versioned PreprocOutput / PreprocUnit / Locator contract with per-file fault isolation (D4, D5).
 
-- [ ] `W01.P02.S04` - Define PreprocOutput, PreprocUnit, and Locator models with extra=forbid, the units/text XOR validator, and the schema-version gate (D4, D5); `src/vaultspec_rag/indexer/_preprocess_schema.py`.
-- [ ] `W01.P02.S05` - Add unit tests with valid, invalid, newer-version, and older-version fixtures (D4, D5); `src/vaultspec_rag/tests/test_preprocess_schema.py`.
+- [x] `W01.P02.S04` - Define PreprocOutput, PreprocUnit, and Locator models with extra=forbid, the units/text XOR validator, and the schema-version gate (D4, D5); `src/vaultspec_rag/indexer/_preprocess_schema.py`.
+- [x] `W01.P02.S05` - Add unit tests with valid, invalid, newer-version, and older-version fixtures (D4, D5); `src/vaultspec_rag/tests/test_preprocess_schema.py`.
 
 ## Wave `W02` - execution and cache - make a rule run
 

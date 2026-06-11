@@ -33,6 +33,7 @@ from ._chunking import (
     SUPPORTED_EXTENSIONS,
     _is_binary,
 )
+from ._preprocess_config import PreprocessConfig, load_preprocess_rules
 from ._streaming import (
     _stream_encode_and_upsert_codebase,
     encode_and_upsert_code_slice,
@@ -216,6 +217,18 @@ class CodebaseIndexer:
         if not patterns:
             return None
         return pathspec.GitIgnoreSpec.from_lines(patterns)
+
+    def _build_preprocess_rules(self) -> PreprocessConfig:
+        """Resolve ``.vaultragpreprocess.toml`` into compiled preprocess rules.
+
+        Root-only resolution, mirroring ``_build_vaultragignore_spec``: read
+        fresh from the project root on each call so an edited config is picked
+        up on the next scan. Degrades to an empty config on any defect (D1, D3).
+
+        Returns:
+            The resolved :class:`PreprocessConfig` (empty when no rules apply).
+        """
+        return load_preprocess_rules(self.root_dir)
 
     def _scan_codebase(self) -> list[pathlib.Path]:
         """Scan codebase for supported source files.
