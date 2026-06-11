@@ -103,19 +103,19 @@ Ship the operator surface and the two independent adjacent asks (D13): the prepr
 
 Add the vaultspec-rag preprocess list/check/run-one verb group with the --json envelope and check as the only hard-fail path (D13).
 
-- [ ] `W04.P10.S28` - Add the preprocess Typer sub-app with list, check, and run-one verbs and the --json envelope (D13); `src/vaultspec_rag/cli/_preprocess.py`.
-- [ ] `W04.P10.S29` - Register the preprocess sub-app on the CLI root (D13); `src/vaultspec_rag/cli/__init__.py`.
-- [ ] `W04.P10.S30` - Add unit tests for the three verbs including check non-zero exit on invalid config (D13); `src/vaultspec_rag/tests/test_cli_preprocess.py`.
+- [x] `W04.P10.S28` - Add the preprocess Typer sub-app with list, check, and run-one verbs and the --json envelope (D13); `src/vaultspec_rag/cli/_preprocess.py`.
+- [x] `W04.P10.S29` - Register the preprocess sub-app on the CLI root (D13); `src/vaultspec_rag/cli/__init__.py`.
+- [x] `W04.P10.S30` - Add unit tests for the three verbs including check non-zero exit on invalid config (D13); `src/vaultspec_rag/tests/test_cli_preprocess.py`.
 
 ### Phase `W04.P11` - adjacent asks
 
 Add the four default plain-text extensions and the default-on HTML-to-text normalisation step (D13).
 
-- [ ] `W04.P11.S31` - Add the .txt, .xml, .xsd, and .properties entries to LANGUAGE_MAP (D13); `src/vaultspec_rag/indexer/_chunking.py`.
-- [ ] `W04.P11.S32` - Bump the SUPPORTED_EXTENSIONS test floor and add positive map assertions (D13); `src/vaultspec_rag/tests/test_indexer_unit.py`.
-- [ ] `W04.P11.S33` - Implement the stdlib html.parser strip with raw-markup fallback and thread html_strip into the worker (D13); `src/vaultspec_rag/indexer/_chunk_worker.py`.
-- [ ] `W04.P11.S34` - Add the html_strip config default and env override (D13); `src/vaultspec_rag/config.py`.
-- [ ] `W04.P11.S35` - Add unit tests for HTML stripping and the new extension behaviour (D13); `src/vaultspec_rag/tests/test_html_strip.py`.
+- [x] `W04.P11.S31` - Add the .txt, .xml, .xsd, and .properties entries to LANGUAGE_MAP (D13); `src/vaultspec_rag/indexer/_chunking.py`.
+- [x] `W04.P11.S32` - Bump the SUPPORTED_EXTENSIONS test floor and add positive map assertions (D13); `src/vaultspec_rag/tests/test_indexer_unit.py`.
+- [x] `W04.P11.S33` - Implement the stdlib html.parser strip with raw-markup fallback and thread html_strip into the worker (D13); `src/vaultspec_rag/indexer/_chunk_worker.py`.
+- [x] `W04.P11.S34` - Add the html_strip config default and env override (D13); `src/vaultspec_rag/config.py`.
+- [x] `W04.P11.S35` - Add unit tests for HTML stripping and the new extension behaviour (D13); `src/vaultspec_rag/tests/test_html_strip.py`.
 
 ## Wave `W05` - verification and docs
 

@@ -61,6 +61,7 @@ class EnvVar(StrEnum):
     WATCH_COOLDOWN_S = "VAULTSPEC_RAG_WATCH_COOLDOWN_S"
     # Document-preprocessing hook knobs (#185).
     PREPROCESS_MAX_EMITTED_BYTES = "VAULTSPEC_RAG_PREPROCESS_MAX_EMITTED_BYTES"
+    HTML_STRIP = "VAULTSPEC_RAG_HTML_STRIP"
 
     QDRANT_URL = "VAULTSPEC_RAG_QDRANT_URL"
     QDRANT_API_KEY = "VAULTSPEC_RAG_QDRANT_API_KEY"
@@ -107,6 +108,7 @@ _ENV_OVERRIDE_MAP: dict[str, EnvVar] = {
     "watch_cooldown_s": EnvVar.WATCH_COOLDOWN_S,
     # Document-preprocessing hook knobs (#185).
     "preprocess_max_emitted_bytes": EnvVar.PREPROCESS_MAX_EMITTED_BYTES,
+    "html_strip": EnvVar.HTML_STRIP,
     "qdrant_url": EnvVar.QDRANT_URL,
     "qdrant_api_key": EnvVar.QDRANT_API_KEY,
     "qdrant_quantization": EnvVar.QDRANT_QUANTIZATION,
@@ -227,6 +229,11 @@ class VaultSpecConfigWrapper:
         # produces, so a 12 MB PDF that distils to 40 KB indexes while a
         # runaway extractor that emits tens of MB is skipped (D10).
         "preprocess_max_emitted_bytes": 10 * 1024 * 1024,
+        # Strip HTML tags to plain text before chunking ``.html`` sources
+        # (#185 adjacent ask). Default on: raw markup wastes ~1/3 of each
+        # chunk's budget and pollutes results with navigation boilerplate.
+        # Falls back to raw-markup chunking on any parse error.
+        "html_strip": True,
     }
 
     def __init__(self, base: BaseConfig) -> None:

@@ -176,6 +176,19 @@ def _get_chunker() -> ASTChunker:
     return _CHUNKER
 
 
+def _resolve_html_strip() -> bool:
+    """Resolve the ``html_strip`` knob (#185 adjacent ask).
+
+    Read from config rather than threaded: it is an env-or-default boolean with
+    no CLI override, so a spawn worker (which inherits the parent's environment)
+    resolves the same value the parent would. ``config`` is torch-free, so this
+    import does not violate ``index-workers-stay-cpu-only``.
+    """
+    from ..config import get_config
+
+    return bool(get_config().html_strip)
+
+
 def _decode_source(raw: bytes, path: pathlib.Path) -> str | None:
     """Decode raw file bytes as UTF-8 with universal-newline translation.
 
@@ -196,8 +209,14 @@ def _chunk_decoded(
     content: str,
     path: pathlib.Path,
     root_dir: pathlib.Path,
+    html_strip: bool = True,
 ) -> list[CodeChunk]:
-    """Split already-decoded source into chunks, selecting AST vs splitter."""
+    """Split already-decoded source into chunks, selecting AST vs splitter.
+
+    For ``.html`` sources, when ``html_strip`` is set the markup is normalised
+    to plain text before splitting so chunks carry semantic content rather than
+    tag soup (#185 adjacent ask).
+    """
     ext = path.suffix.lower()
     lang_entry = LANGUAGE_MAP.get(ext)
     language = lang_entry[0] if lang_entry else "text"
@@ -206,6 +225,10 @@ def _chunk_decoded(
 
     if grammar:
         return chunk_with_ast(content, rel_path, language, grammar)
+    if html_strip and language == "html":
+        from ._html import html_to_text
+
+        content = html_to_text(content)
     return chunk_with_splitter(content, rel_path, language)
 
 
@@ -251,7 +274,7 @@ def chunk_file(
     content = _decode_source(raw, path)
     if content is None:
         return []
-    return _chunk_decoded(content, path, root_dir)
+    return _chunk_decoded(content, path, root_dir, _resolve_html_strip())
 
 
 def chunk_and_hash_file(
@@ -304,7 +327,7 @@ def chunk_and_hash_file(
     if content is None:
         return FileChunkResult(rel_path, content_hash, [])
     try:
-        chunks = _chunk_decoded(content, path, root_dir)
+        chunks = _chunk_decoded(content, path, root_dir, _resolve_html_strip())
     except Exception:
         # The hash is already computed, so still return a result (with no
         # chunks) rather than raising: that keeps the file present in the

@@ -16,6 +16,16 @@ related:
 
 ## Description
 
+Created `preprocess_app` in `cli/_app.py` (beside the server sub-apps), registered it on
+the root via `app.add_typer(preprocess_app, name="preprocess")`, added it to `__all__`, and
+imported the three handlers in `cli/__init__.py` so their `@preprocess_app.command`
+decorators fire at package import (D13).
+
 ## Outcome
 
+`vaultspec-rag preprocess {list,check,run-one}` is reachable from the root CLI; help lists
+the group.
+
 ## Notes
+
+Mirrors the established sub-app nesting pattern (server/mcp/projects/watcher).
