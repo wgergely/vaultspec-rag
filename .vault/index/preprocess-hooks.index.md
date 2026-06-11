@@ -46,9 +46,14 @@ related:
   - '[[2026-06-10-preprocess-hooks-W05-P13-S39]]'
   - '[[2026-06-10-preprocess-hooks-W05-P13-S40]]'
   - '[[2026-06-10-preprocess-hooks-W05-P13-S41]]'
+  - '[[2026-06-10-preprocess-hooks-W06-P14-S42]]'
+  - '[[2026-06-10-preprocess-hooks-W06-P15-S43]]'
+  - '[[2026-06-10-preprocess-hooks-W06-P15-S44]]'
+  - '[[2026-06-10-preprocess-hooks-W06-P16-S45]]'
   - '[[2026-06-10-preprocess-hooks-adr]]'
   - '[[2026-06-10-preprocess-hooks-plan]]'
   - '[[2026-06-10-preprocess-hooks-research]]'
+  - '[[2026-06-11-preprocess-hooks-audit]]'
 ---
 
 # `preprocess-hooks` feature index
@@ -60,6 +65,10 @@ Auto-generated index of all documents tagged with `#preprocess-hooks`.
 ### adr
 
 - `2026-06-10-preprocess-hooks-adr` - `preprocess-hooks` adr: `document preprocessing hook infrastructure` | (**status:** `accepted`)
+
+### audit
+
+- `2026-06-11-preprocess-hooks-audit` - `preprocess-hooks` audit: `code review`
 
 ### exec
 
@@ -104,6 +113,10 @@ Auto-generated index of all documents tagged with `#preprocess-hooks`.
 - `2026-06-10-preprocess-hooks-W05-P13-S39` - Write the preprocessing-hooks user guide covering config, schema, and the command-only v1 security posture (D9, D13)
 - `2026-06-10-preprocess-hooks-W05-P13-S40` - Add illustrative licence-clean extractor plugin sketches with the pypdf-BSD versus PyMuPDF-AGPL note (D13)
 - `2026-06-10-preprocess-hooks-W05-P13-S41` - Update the README with the feature, new env vars, and CLI verbs (D13)
+- `2026-06-10-preprocess-hooks-W06-P14-S42` - Scaffold a disposable toy workspace with sample binary data, a project-side extractor, and a .vaultragpreprocess.toml (D1, D13)
+- `2026-06-10-preprocess-hooks-W06-P15-S43` - Drive vaultspec-rag preprocess list/check/run-one against the toy project and capture output (D13)
+- `2026-06-10-preprocess-hooks-W06-P15-S44` - Index and search the toy project on real GPU, confirming anchors/locators and skip visibility (D11, D12)
+- `2026-06-10-preprocess-hooks-W06-P16-S45` - Run the pre-commit hook suite over the feature branch in a production-like pass and confirm green
 
 ### plan
 

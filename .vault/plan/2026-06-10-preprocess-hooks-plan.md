@@ -137,6 +137,29 @@ Update the vaultspec-rag rule, README/user docs, and the security posture and il
 - [x] `W05.P13.S40` - Add illustrative licence-clean extractor plugin sketches with the pypdf-BSD versus PyMuPDF-AGPL note (D13); `docs/preprocessing-hooks.md`.
 - [x] `W05.P13.S41` - Update the README with the feature, new env vars, and CLI verbs (D13); `README.md`.
 
+## Wave `W06` - manual production-like integration validation
+
+Non-test-driven, hands-on validation: an agent drives the real vaultspec-rag CLI and service against a toy project with sample binary data and a project-supplied extractor, confirming the preprocess hook works as a real user experiences it, then validates the pre-commit hook suite in a production-like pass. Depends on every prior Wave landing; final sign-off before release.
+
+### Phase `W06.P14` - toy project and sample corpus
+
+Stand up a disposable toy workspace with a real .vaultragpreprocess.toml, a project-side extractor script, and sample binary/unsupported data, mirroring a downstream consumer (D1, D13).
+
+- [x] `W06.P14.S42` - Scaffold a disposable toy workspace with sample binary data, a project-side extractor, and a .vaultragpreprocess.toml (D1, D13); `tmp toy project (manual)`.
+
+### Phase `W06.P15` - drive the real CLI end-to-end
+
+Run the installed vaultspec-rag preprocess verbs, index, and search against the toy project and confirm extraction, anchors/locators, and skip visibility behave as documented (D11, D12, D13).
+
+- [x] `W06.P15.S43` - Drive vaultspec-rag preprocess list/check/run-one against the toy project and capture output (D13); `vaultspec-rag preprocess (manual)`.
+- [x] `W06.P15.S44` - Index and search the toy project on real GPU, confirming anchors/locators and skip visibility (D11, D12); `vaultspec-rag index/search (manual)`.
+
+### Phase `W06.P16` - production-like pre-commit validation
+
+Run the repository pre-commit hook suite over the feature branch in a production-like pass and confirm it is green (vault-fix, mdformat, pymarkdown, ruff, ty, spec-check, provider artifacts).
+
+- [x] `W06.P16.S45` - Run the pre-commit hook suite over the feature branch in a production-like pass and confirm green; `.pre-commit-config.yaml (manual)`.
+
 ## Description
 
 This plan implements the generic document-preprocessing hook infrastructure decided in
