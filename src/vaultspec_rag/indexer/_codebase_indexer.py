@@ -34,7 +34,11 @@ from ._chunking import (
     _is_binary,
 )
 from ._preprocess_cache import clear_preprocess_cache, preprocess_cache_dir
-from ._preprocess_config import PreprocessConfig, load_preprocess_rules
+from ._preprocess_config import (
+    PreprocessConfig,
+    PreprocessContext,
+    load_preprocess_rules,
+)
 from ._streaming import (
     _stream_encode_and_upsert_codebase,
     encode_and_upsert_code_slice,
@@ -112,6 +116,13 @@ class CodebaseIndexer:
         cfg = get_config()
         self._data_root = root_dir / cfg.data_dir
         self._meta_path = self._data_root / cfg.code_index_metadata_file
+        # Per-run document-preprocessing state (#185). Both are reset at the
+        # start of each full/incremental run; the writer lock serialises runs
+        # so instance-scoped state is safe. ``_prep_ctx`` is the context handed
+        # to chunk workers; ``_prep_skips`` accumulates "rel_path: reason" for
+        # files a preprocess rule skipped, surfaced in the run's IndexResult.
+        self._prep_ctx: PreprocessContext | None = None
+        self._prep_skips: list[str] = []
 
     @staticmethod
     def _get_language(path: pathlib.Path) -> str:
@@ -232,9 +243,47 @@ class CodebaseIndexer:
         """
         return load_preprocess_rules(self.root_dir)
 
+    def preprocess_config(self) -> PreprocessConfig:
+        """Resolve the project's preprocess rules (public accessor, #185).
+
+        Used by the watcher to make its change filter preprocess-aware (D8).
+        """
+        return self._build_preprocess_rules()
+
     def _clear_preprocess_cache(self) -> None:
         """Remove the preprocess output cache subtree for a clean rebuild (D7)."""
         clear_preprocess_cache(preprocess_cache_dir(self._data_root))
+
+    def _resolve_preprocess_context(self) -> PreprocessContext | None:
+        """Build the per-run preprocess context, or ``None`` when no rules apply.
+
+        Returning ``None`` for a project with no ``.vaultragpreprocess.toml``
+        rules keeps the worker path byte-identical to the pre-feature behaviour
+        (the workers receive ``prep=None``), so there is zero overhead when the
+        hook is unused.
+        """
+        config = self._build_preprocess_rules()
+        if not config:
+            return None
+        from ..config import get_config
+
+        cfg = get_config()
+        return PreprocessContext(
+            config=config,
+            cache_root=preprocess_cache_dir(self._data_root),
+            max_emitted_bytes=int(cfg.preprocess_max_emitted_bytes),
+        )
+
+    def _begin_preprocess_run(self) -> None:
+        """Reset per-run preprocess state at the start of a full/incremental run."""
+        self._prep_ctx = self._resolve_preprocess_context()
+        self._prep_skips = []
+
+    def _record_preprocess_result(self, res: FileChunkResult | None) -> None:
+        """Accumulate a worker result's preprocess skip for failure visibility (D11)."""
+        if res is not None and res.preprocess_status == "skipped":
+            reason = res.preprocess_reason or "preprocessor skipped the file"
+            self._prep_skips.append(f"{res.rel_path}: {reason}")
 
     def _scan_codebase(self) -> list[pathlib.Path]:
         """Scan codebase for supported source files.
@@ -272,6 +321,19 @@ class CodebaseIndexer:
             self._process_scan_files(dirpath, files, rel_dir, _is_excluded, result)
         return result
 
+    def _matches_preprocess_rule(self, rel: str) -> bool:
+        """Return whether a preprocess rule matches this project-relative path.
+
+        Ignore always wins (this is only consulted after the ignore gate), but a
+        match expands the indexable set: a matched file is admitted even when its
+        extension is unsupported, it exceeds ``_MAX_FILE_SIZE``, or it is binary,
+        because the preprocessor extracts indexable text from it (D2, D10).
+        """
+        prep = getattr(self, "_prep_ctx", None)
+        if prep is None:
+            return False
+        return prep.config.match(rel) is not None
+
     def _process_scan_files(
         self,
         dirpath: str,
@@ -282,10 +344,15 @@ class CodebaseIndexer:
     ) -> None:
         for fname in files:
             p = pathlib.Path(dirpath) / fname
-            if p.suffix.lower() not in SUPPORTED_EXTENSIONS:
-                continue
             rel = fname if rel_dir == "." else f"{rel_dir}/{fname}"
             if _is_excluded(rel):
+                continue
+            # A preprocess-rule match relaxes the extension, size, and binary
+            # gates (D2, D10); ignore has already been applied above and wins.
+            if self._matches_preprocess_rule(rel):
+                result.append(p)
+                continue
+            if p.suffix.lower() not in SUPPORTED_EXTENSIONS:
                 continue
             if p.stat().st_size > _MAX_FILE_SIZE:
                 logger.debug("Skipping oversized file: %s", rel)
@@ -432,7 +499,9 @@ class CodebaseIndexer:
         try:
             with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
                 futures = {
-                    pool.submit(_chunk_worker.chunk_file, p, self.root_dir): p
+                    pool.submit(
+                        _chunk_worker.chunk_file, p, self.root_dir, self._prep_ctx
+                    ): p
                     for p in paths
                 }
                 for future in as_completed(futures):
@@ -481,7 +550,9 @@ class CodebaseIndexer:
         all_chunks: list[CodeChunk] = []
         for p in paths:
             try:
-                all_chunks.extend(_chunk_worker.chunk_file(p, self.root_dir))
+                all_chunks.extend(
+                    _chunk_worker.chunk_file(p, self.root_dir, self._prep_ctx)
+                )
             except Exception:
                 logger.warning("Failed to chunk %s", p, exc_info=True)
             reporter.advance()
@@ -526,10 +597,13 @@ class CodebaseIndexer:
 
         for p in paths:
             try:
-                res = _chunk_worker.chunk_and_hash_file(p, self.root_dir)
+                res = _chunk_worker.chunk_and_hash_file(
+                    p, self.root_dir, self._prep_ctx
+                )
                 if res is not None:
                     meta[res.rel_path] = res.content_hash
                     acc.extend(res.chunks)
+                    self._record_preprocess_result(res)
             except Exception:
                 logger.warning("Failed to chunk %s", p, exc_info=True)
             advanced += 1
@@ -563,6 +637,7 @@ class CodebaseIndexer:
                         _chunk_worker.chunk_and_hash_file,
                         p,
                         self.root_dir,
+                        self._prep_ctx,
                     )
                     for p in itertools.islice(paths_iter, window)
                 }
@@ -601,6 +676,7 @@ class CodebaseIndexer:
         died = False
         if res is not None:
             meta[res.rel_path] = res.content_hash
+            self._record_preprocess_result(res)
             if res.chunks and not put_fn(res.chunks):
                 died = True
 
@@ -608,7 +684,12 @@ class CodebaseIndexer:
         nxt = next(paths_iter, None)
         if nxt is not None:
             pending.add(
-                pool.submit(_chunk_worker.chunk_and_hash_file, nxt, self.root_dir)
+                pool.submit(
+                    _chunk_worker.chunk_and_hash_file,
+                    nxt,
+                    self.root_dir,
+                    self._prep_ctx,
+                )
             )
         return died, 1
 
@@ -900,6 +981,7 @@ class CodebaseIndexer:
 
         start = time.time()
         slice_size = max(1, get_config().embedding_batch_size)
+        self._begin_preprocess_run()
 
         reporter.phase_start("scan codebase", None)
         paths = self._scan_codebase()
@@ -982,6 +1064,8 @@ class CodebaseIndexer:
             duration_ms=duration_ms,
             device=self.model.device,
             files=len(paths),
+            preprocess_skipped=len(self._prep_skips),
+            preprocess_failures=list(self._prep_skips),
         )
 
     def incremental_index(
@@ -1043,6 +1127,7 @@ class CodebaseIndexer:
 
         start = time.time()
         slice_size = max(1, get_config().embedding_batch_size)
+        self._begin_preprocess_run()
 
         prev_meta = self._load_meta()
 
@@ -1163,22 +1248,25 @@ class CodebaseIndexer:
             rel = str(path.relative_to(self.root_dir)).replace("\\", "/")
         except ValueError:
             return
-        indexable = (
-            path.is_file()
-            and path.suffix.lower() in SUPPORTED_EXTENSIONS
-            and not _is_excluded(rel)
-        )
-        if indexable:
-            try:
-                too_big = path.stat().st_size > _MAX_FILE_SIZE
-            except OSError:
+        if path.is_file() and not _is_excluded(rel):
+            # A preprocess-rule match admits the file regardless of extension,
+            # size, or binary content (D2, D8, D10) - the preprocessor turns it
+            # into indexable text. Ignore was already applied above and wins.
+            if self._matches_preprocess_rule(rel):
+                to_hash[rel] = path
                 return
-            if too_big or _is_binary(path):
-                if rel in prev_meta:
-                    delete_files.add(rel)
+            if path.suffix.lower() in SUPPORTED_EXTENSIONS:
+                try:
+                    too_big = path.stat().st_size > _MAX_FILE_SIZE
+                except OSError:
+                    return
+                if too_big or _is_binary(path):
+                    if rel in prev_meta:
+                        delete_files.add(rel)
+                    return
+                to_hash[rel] = path
                 return
-            to_hash[rel] = path
-        elif rel in prev_meta:
+        if rel in prev_meta:
             delete_files.add(rel)
 
     def _hash_changed_paths(
@@ -1227,6 +1315,7 @@ class CodebaseIndexer:
 
         start = time.time()
         slice_size = max(1, get_config().embedding_batch_size)
+        self._begin_preprocess_run()
         prev_meta = self._load_meta()
 
         to_hash, delete_files = self._scan_changed_paths(

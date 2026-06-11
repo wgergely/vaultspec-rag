@@ -16,6 +16,16 @@ related:
 
 ## Description
 
+Added `source_path`, `preprocessor_id`, `anchor`, and `locator` to the `SearchResult`
+dataclass, populated in `_map_codebase_results` from the chunk payload. A module-level
+`_format_locator()` renders the split payload locator into a readable string (e.g.
+`"page 12"`, `"sheet Summary"`) (D12).
+
 ## Outcome
 
+Codebase search results now carry deep-link anchor + human locator for preproc hits; null
+for ordinary code.
+
 ## Notes
+
+Payload is already retrieved `with_payload=True`, so no query change was needed.

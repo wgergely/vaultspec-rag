@@ -26,9 +26,14 @@ from typing import TYPE_CHECKING
 from ..store import CodeChunk
 from ._ast_chunker import ASTChunker
 from ._chunking import LANGUAGE_MAP, TextSplitter
+from ._preprocess_cache import read_cached_output, write_cached_output
+from ._preprocess_runner import run_preprocessor
 
 if TYPE_CHECKING:
     import pathlib
+
+    from ._preprocess_config import PreprocessContext
+    from ._preprocess_schema import PreprocOutput
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +52,120 @@ class FileChunkResult:
     lets the full-index path skip the separate hash pass - the tree is read
     once, not twice (#155 P03 / finding C4). ``slots=True`` keeps the pickled
     payload that crosses the process boundary lean (research O3).
+
+    ``preprocess_status`` records the disposition of a document-preprocessing
+    rule when one matched this file (#185): ``ok`` (chunks came from the
+    preprocessor), ``skipped`` (the preprocessor failed under ``on_error=skip``;
+    no chunks), ``passthrough`` (the raw file was chunked normally), or ``None``
+    (no rule matched). The orchestrator accumulates skip counts and reasons from
+    these for failure-visibility surfacing (D11).
     """
 
     rel_path: str
     content_hash: str
     chunks: list[CodeChunk]
+    preprocess_status: str | None = None
+    preprocess_reason: str | None = None
+
+
+@dataclass(slots=True)
+class _PreprocessOutcome:
+    """Internal result of attempting to preprocess one file in the worker."""
+
+    status: str  # "none" | "ok" | "skipped" | "passthrough"
+    chunks: list[CodeChunk]
+    reason: str | None
+
+
+def _chunks_from_output(output: PreprocOutput, rel_path: str) -> list[CodeChunk]:
+    """Build ``CodeChunk``s from validated preprocessor output (D6, D12).
+
+    In ``units`` mode each unit becomes one chunk carrying its anchor and split
+    locator. In ``text`` mode the emitted text is run through the ordinary text
+    splitter and each resulting chunk is stamped with the source path and
+    preprocessor id so it is identifiable and purgeable by source path.
+    """
+    if output.units is not None:
+        chunks: list[CodeChunk] = []
+        for index, unit in enumerate(output.units):
+            locator = unit.locator
+            locator_kind = locator.kind if locator is not None else None
+            value_int: int | None = None
+            value_str: str | None = None
+            if locator is not None:
+                if isinstance(locator.value, bool):
+                    value_str = str(locator.value)
+                elif isinstance(locator.value, int):
+                    value_int = locator.value
+                else:
+                    value_str = str(locator.value)
+            chunk_hash = hashlib.blake2b(
+                unit.text.encode("utf-8"),
+                digest_size=6,
+            ).hexdigest()
+            chunks.append(
+                CodeChunk(
+                    id=f"{rel_path}::pp:{index}:{chunk_hash}",
+                    path=rel_path,
+                    language="text",
+                    content=unit.text,
+                    line_start=0,
+                    line_end=0,
+                    source_path=rel_path,
+                    preprocessor_id=output.preprocessor_id,
+                    anchor=unit.anchor,
+                    locator_kind=locator_kind,
+                    locator_value_int=value_int,
+                    locator_value_str=value_str,
+                    vector=[],
+                ),
+            )
+        return chunks
+
+    text = output.text or ""
+    chunks = chunk_with_splitter(text, rel_path, "text")
+    for chunk in chunks:
+        chunk.source_path = rel_path
+        chunk.preprocessor_id = output.preprocessor_id
+    return chunks
+
+
+def preprocess_file(
+    content_hash: str,
+    path: pathlib.Path,
+    root_dir: pathlib.Path,
+    prep: PreprocessContext,
+) -> _PreprocessOutcome:
+    """Run the matched preprocess rule for a file, consulting the cache (D6, D7).
+
+    Returns an outcome whose ``status`` is ``none`` (no rule matched - chunk
+    normally), ``ok`` (use the produced chunks), ``skipped`` (drop the file),
+    or ``passthrough`` (chunk the raw file normally).
+
+    Raises:
+        PreprocessAbortError: If the rule fails and ``on_error == "fail"`` -
+            propagates out of the worker to abort the run.
+    """
+    rel_path = str(path.relative_to(root_dir)).replace("\\", "/")
+    rule = prep.config.match(rel_path)
+    if rule is None or rule.command is None:
+        return _PreprocessOutcome("none", [], None)
+
+    cached = read_cached_output(prep.cache_root, content_hash, rule.command)
+    if cached is not None:
+        return _PreprocessOutcome("ok", _chunks_from_output(cached, rel_path), None)
+
+    result = run_preprocessor(path, rule, max_emitted_bytes=prep.max_emitted_bytes)
+    if result.status == "ok" and result.output is not None:
+        write_cached_output(prep.cache_root, content_hash, rule.command, result.output)
+        return _PreprocessOutcome(
+            "ok",
+            _chunks_from_output(result.output, rel_path),
+            None,
+        )
+    if result.status == "passthrough":
+        return _PreprocessOutcome("passthrough", [], result.reason)
+    return _PreprocessOutcome("skipped", [], result.reason)
 
 
 def _get_chunker() -> ASTChunker:
@@ -95,7 +209,11 @@ def _chunk_decoded(
     return chunk_with_splitter(content, rel_path, language)
 
 
-def chunk_file(path: pathlib.Path, root_dir: pathlib.Path) -> list[CodeChunk]:
+def chunk_file(
+    path: pathlib.Path,
+    root_dir: pathlib.Path,
+    prep: PreprocessContext | None = None,
+) -> list[CodeChunk]:
     """Read a file, decode it once, and split it into AST-aware ``CodeChunk``s.
 
     This is the picklable process-pool entry point for the incremental and
@@ -103,19 +221,33 @@ def chunk_file(path: pathlib.Path, root_dir: pathlib.Path) -> list[CodeChunk]:
     file read, tree-sitter parsing (or text-splitter fallback), and chunk
     construction with empty vectors for the consumer to embed.
 
+    When ``prep`` is supplied and a preprocess rule matches this file, the
+    matched preprocessor runs first (D6): on success its chunks are returned; on
+    a skip the file yields no chunks; on passthrough/no-match the raw file is
+    chunked normally.
+
     Args:
         path: Absolute path to the source file.
         root_dir: Project root used to compute the chunk's relative path.
+        prep: Optional preprocess context (rules + cache + cap).
 
     Returns:
         List of ``CodeChunk`` instances with empty vectors, or an empty list
-        when the file cannot be read or decoded.
+        when the file cannot be read/decoded or was preprocess-skipped.
     """
     try:
         raw = path.read_bytes()
     except OSError as e:
         logger.warning("Cannot read %s: %s", path, e)
         return []
+    if prep is not None:
+        content_hash = hashlib.blake2b(raw).hexdigest()
+        outcome = preprocess_file(content_hash, path, root_dir, prep)
+        if outcome.status == "ok":
+            return outcome.chunks
+        if outcome.status == "skipped":
+            return []
+        # "passthrough" / "none" fall through to ordinary chunking below.
     content = _decode_source(raw, path)
     if content is None:
         return []
@@ -125,6 +257,7 @@ def chunk_file(path: pathlib.Path, root_dir: pathlib.Path) -> list[CodeChunk]:
 def chunk_and_hash_file(
     path: pathlib.Path,
     root_dir: pathlib.Path,
+    prep: PreprocessContext | None = None,
 ) -> FileChunkResult | None:
     """Read a file once, returning both its content hash and its chunks.
 
@@ -149,6 +282,24 @@ def chunk_and_hash_file(
         return None
     content_hash = hashlib.blake2b(raw).hexdigest()
     rel_path = str(path.relative_to(root_dir)).replace("\\", "/")
+    if prep is not None:
+        outcome = preprocess_file(content_hash, path, root_dir, prep)
+        if outcome.status == "ok":
+            return FileChunkResult(
+                rel_path,
+                content_hash,
+                outcome.chunks,
+                preprocess_status="ok",
+            )
+        if outcome.status == "skipped":
+            return FileChunkResult(
+                rel_path,
+                content_hash,
+                [],
+                preprocess_status="skipped",
+                preprocess_reason=outcome.reason,
+            )
+        # "passthrough" / "none" fall through to ordinary chunking below.
     content = _decode_source(raw, path)
     if content is None:
         return FileChunkResult(rel_path, content_hash, [])

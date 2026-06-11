@@ -41,6 +41,7 @@ __all__ = [
     "OnError",
     "PreprocessConfig",
     "PreprocessConfigError",
+    "PreprocessContext",
     "PreprocessRule",
     "load_preprocess_rules",
 ]
@@ -148,6 +149,34 @@ class PreprocessConfig:
             if spec.match_file(rel_path):
                 return rule
         return None
+
+    def __reduce__(self) -> tuple[type[PreprocessConfig], tuple[list[PreprocessRule]]]:
+        """Pickle by re-running the constructor over the picklable rules.
+
+        The compiled ``pathspec`` matchers are rebuilt on unpickle rather than
+        serialised, so this config can be threaded into a spawn chunk worker
+        (D6) without depending on ``pathspec`` internals being picklable.
+        """
+        return (PreprocessConfig, (self.rules,))
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class PreprocessContext:
+    """Everything a chunk worker needs to preprocess a matched file.
+
+    Threaded into the spawn worker alongside each file (D6). All fields are
+    picklable: :class:`PreprocessConfig` rebuilds its matchers on unpickle,
+    ``cache_root`` is a path, and the cap is an int.
+
+    Attributes:
+        config: The resolved per-root preprocess rules.
+        cache_root: The preprocess output cache root.
+        max_emitted_bytes: The emitted-text length cap (D10).
+    """
+
+    config: PreprocessConfig
+    cache_root: pathlib.Path
+    max_emitted_bytes: int
 
 
 def load_preprocess_rules(

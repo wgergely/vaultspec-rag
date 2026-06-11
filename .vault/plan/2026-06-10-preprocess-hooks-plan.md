@@ -58,42 +58,42 @@ Wire preprocessing into the real index path (D2, D6, D8, D10, D11, D12): worker 
 
 Insert preprocess_decoded at the top of both worker chunk functions and thread rules and knobs into the spawn worker pickle-safely (D6).
 
-- [ ] `W03.P05.S12` - Insert preprocess_decoded at the top of both chunk_file and chunk_and_hash_file (D6); `src/vaultspec_rag/indexer/_chunk_worker.py`.
-- [ ] `W03.P05.S13` - Thread resolved rules and knobs pickle-safely from the codebase indexer into the worker calls (D6); `src/vaultspec_rag/indexer/_codebase_indexer.py`.
-- [ ] `W03.P05.S14` - Add a fresh-interpreter regression test that the worker import chain stays torch-free with preprocess wired (D6); `src/vaultspec_rag/tests/test_preprocess_worker.py`.
+- [x] `W03.P05.S12` - Insert preprocess_decoded at the top of both chunk_file and chunk_and_hash_file (D6); `src/vaultspec_rag/indexer/_chunk_worker.py`.
+- [x] `W03.P05.S13` - Thread resolved rules and knobs pickle-safely from the codebase indexer into the worker calls (D6); `src/vaultspec_rag/indexer/_codebase_indexer.py`.
+- [x] `W03.P05.S14` - Add a fresh-interpreter regression test that the worker import chain stays torch-free with preprocess wired (D6); `src/vaultspec_rag/tests/test_preprocess_worker.py`.
 
 ### Phase `W03.P06` - gate awareness and size cap
 
 Make the three extension-gate sites preprocess-rule-aware and relax source size/binary gates for matched files (D2, D8, D10).
 
-- [ ] `W03.P06.S15` - Make the full-scan extension, size, and binary gate preprocess-rule-aware (D2, D10); `src/vaultspec_rag/indexer/_codebase_indexer.py`.
-- [ ] `W03.P06.S16` - Make the scoped incremental gate preprocess-rule-aware (D2, D8, D10); `src/vaultspec_rag/indexer/_codebase_indexer.py`.
-- [ ] `W03.P06.S17` - Make the watcher \_is_code_change preprocess-rule-aware (D8); `src/vaultspec_rag/watcher.py`.
+- [x] `W03.P06.S15` - Make the full-scan extension, size, and binary gate preprocess-rule-aware (D2, D10); `src/vaultspec_rag/indexer/_codebase_indexer.py`.
+- [x] `W03.P06.S16` - Make the scoped incremental gate preprocess-rule-aware (D2, D8, D10); `src/vaultspec_rag/indexer/_codebase_indexer.py`.
+- [x] `W03.P06.S17` - Make the watcher \_is_code_change preprocess-rule-aware (D8); `src/vaultspec_rag/watcher.py`.
 
 ### Phase `W03.P07` - preproc_docs collection
 
 Add the dedicated Qdrant collection, payload mapping with split locator indexes, stored-chunk id, and purge-by-source-path reconciliation (D12).
 
-- [ ] `W03.P07.S18` - Add the preproc_docs collection schema and payload indexes with the split locator fields (D12); `src/vaultspec_rag/store.py`.
-- [ ] `W03.P07.S19` - Implement upsert, stored-chunk id, and purge-by-source-path reconciliation for preproc units (D12); `src/vaultspec_rag/store.py`.
-- [ ] `W03.P07.S20` - Add unit tests for collection upsert, the locator-index split, and purge-by-path (D12); `src/vaultspec_rag/tests/test_preprocess_store.py`.
+- [x] `W03.P07.S18` - Add the preproc_docs collection schema and payload indexes with the split locator fields (D12); `src/vaultspec_rag/store.py`.
+- [x] `W03.P07.S19` - Implement upsert, stored-chunk id, and purge-by-source-path reconciliation for preproc units (D12); `src/vaultspec_rag/store.py`.
+- [x] `W03.P07.S20` - Add unit tests for collection upsert, the locator-index split, and purge-by-path (D12); `src/vaultspec_rag/tests/test_preprocess_store.py`.
 
 ### Phase `W03.P08` - failure visibility
 
 Extend IndexResult and FileChunkResult with preprocess skip/fail counts and the failure list, surfaced no-swallow in jobs and CLI JSON (D11).
 
-- [ ] `W03.P08.S21` - Extend IndexResult with preprocess_skipped, preprocess_failed, and the preprocess_failures list (D11); `src/vaultspec_rag/indexer/_vault_prep.py`.
-- [ ] `W03.P08.S22` - Carry preprocess status on FileChunkResult and accumulate counts in the orchestrator (D11); `src/vaultspec_rag/indexer/_codebase_indexer.py`.
-- [ ] `W03.P08.S23` - Surface preprocess counts in the jobs registry and watcher summary strings (D11); `src/vaultspec_rag/server/jobs.py`.
-- [ ] `W03.P08.S24` - Surface preprocess counts in the CLI index --json output (D11); `src/vaultspec_rag/cli/_index.py`.
+- [x] `W03.P08.S21` - Extend IndexResult with preprocess_skipped, preprocess_failed, and the preprocess_failures list (D11); `src/vaultspec_rag/indexer/_vault_prep.py`.
+- [x] `W03.P08.S22` - Carry preprocess status on FileChunkResult and accumulate counts in the orchestrator (D11); `src/vaultspec_rag/indexer/_codebase_indexer.py`.
+- [x] `W03.P08.S23` - Surface preprocess counts in the jobs registry and watcher summary strings (D11); `src/vaultspec_rag/server/jobs.py`.
+- [x] `W03.P08.S24` - Surface preprocess counts in the CLI index --json output (D11); `src/vaultspec_rag/cli/_index.py`.
 
 ### Phase `W03.P09` - result surfacing
 
 Carry anchor and locator onto the search result types and the CLI renderer, populated at the codebase-result mapping seam (D12).
 
-- [ ] `W03.P09.S25` - Add anchor and locator fields to SearchResult and populate them at the codebase-result mapping seam (D12); `src/vaultspec_rag/search/_models.py`.
-- [ ] `W03.P09.S26` - Add anchor and locator to the pydantic SearchResultItem wire model (D12); `src/vaultspec_rag/server/_models.py`.
-- [ ] `W03.P09.S27` - Render anchor and locator in the CLI result table (D12); `src/vaultspec_rag/cli/_render.py`.
+- [x] `W03.P09.S25` - Add anchor and locator fields to SearchResult and populate them at the codebase-result mapping seam (D12); `src/vaultspec_rag/search/_models.py`.
+- [x] `W03.P09.S26` - Add anchor and locator to the pydantic SearchResultItem wire model (D12); `src/vaultspec_rag/server/_models.py`.
+- [x] `W03.P09.S27` - Render anchor and locator in the CLI result table (D12); `src/vaultspec_rag/cli/_render.py`.
 
 ## Wave `W04` - surface and adjacent asks - operator-facing
 
