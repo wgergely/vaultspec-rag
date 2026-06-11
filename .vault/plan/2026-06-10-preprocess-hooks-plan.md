@@ -125,17 +125,17 @@ End-to-end verification on real GPU + real Qdrant + real subprocess and the docu
 
 Prove the hook end-to-end on real GPU, real Qdrant, and a real command preprocessor across full, incremental, and watcher paths (D6, D8, D11, D12).
 
-- [ ] `W05.P12.S36` - Add an end-to-end integration test: a command preprocessor fixture indexed on real GPU and Qdrant and searchable with anchors (D6, D12); `src/vaultspec_rag/tests/integration/test_preprocess_integration.py`.
-- [ ] `W05.P12.S37` - Add incremental and watcher routing coverage for a preprocessable change (D8); `src/vaultspec_rag/tests/integration/test_preprocess_integration.py`.
-- [ ] `W05.P12.S38` - Add coverage-count assertions for a failing preprocessor skip/fail surfacing (D11); `src/vaultspec_rag/tests/integration/test_preprocess_integration.py`.
+- [x] `W05.P12.S36` - Add an end-to-end integration test: a command preprocessor fixture indexed on real GPU and Qdrant and searchable with anchors (D6, D12); `src/vaultspec_rag/tests/integration/test_preprocess_integration.py`.
+- [x] `W05.P12.S37` - Add incremental and watcher routing coverage for a preprocessable change (D8); `src/vaultspec_rag/tests/integration/test_preprocess_integration.py`.
+- [x] `W05.P12.S38` - Add coverage-count assertions for a failing preprocessor skip/fail surfacing (D11); `src/vaultspec_rag/tests/integration/test_preprocess_integration.py`.
 
 ### Phase `W05.P13` - documentation
 
 Update the vaultspec-rag rule, README/user docs, and the security posture and illustrative-plugin notes (D9, D13).
 
-- [ ] `W05.P13.S39` - Write the preprocessing-hooks user guide covering config, schema, and the command-only v1 security posture (D9, D13); `docs/preprocessing-hooks.md`.
-- [ ] `W05.P13.S40` - Add illustrative licence-clean extractor plugin sketches with the pypdf-BSD versus PyMuPDF-AGPL note (D13); `docs/preprocessing-hooks.md`.
-- [ ] `W05.P13.S41` - Update the README with the feature, new env vars, and CLI verbs (D13); `README.md`.
+- [x] `W05.P13.S39` - Write the preprocessing-hooks user guide covering config, schema, and the command-only v1 security posture (D9, D13); `docs/preprocessing-hooks.md`.
+- [x] `W05.P13.S40` - Add illustrative licence-clean extractor plugin sketches with the pypdf-BSD versus PyMuPDF-AGPL note (D13); `docs/preprocessing-hooks.md`.
+- [x] `W05.P13.S41` - Update the README with the feature, new env vars, and CLI verbs (D13); `README.md`.
 
 ## Description
 

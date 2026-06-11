@@ -16,6 +16,16 @@ related:
 
 ## Description
 
+Added an "Illustrative extractors" section to `docs/preprocessing-hooks.md` with
+project-side sketches (PDF via pypdf, XLSX via openpyxl, DOCX via python-docx, XML/XSD via
+stdlib xml.etree), each with explicit licence flags, and a callout that PyMuPDF is AGPL-3.0
+and must not be the default for a licence-clean project (D13).
+
 ## Outcome
 
+Schema-generalisation across formats is documented; the licence-clean stack (pypdf +
+openpyxl + python-docx + xml.etree) is named.
+
 ## Notes
+
+Extractors are examples for the consumer's `tools/`, never dependencies of vaultspec-rag.

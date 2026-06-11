@@ -16,6 +16,16 @@ related:
 
 ## Description
 
+Added an incremental test that full-indexes, writes a new `appendix.pdf`, then calls
+`incremental_index(changed_paths=[new_pdf])` - exactly the scoped entrypoint the watcher
+invokes on a change - and asserts the new binary was extracted and added (D8).
+
 ## Outcome
 
+Passes; confirms the scoped/watcher path routes a changed binary through the preprocessor
+and the preprocess-aware gate admits it.
+
 ## Notes
+
+Exercises the gate-awareness + worker integration on the incremental path, not just full
+index.
