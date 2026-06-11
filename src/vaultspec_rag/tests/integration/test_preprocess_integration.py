@@ -163,3 +163,33 @@ class TestPreprocessEndToEnd:
             assert any("broken.pdf" in f for f in result.preprocess_failures)
         finally:
             store.close()
+
+    @pytest.mark.timeout(600)
+    def test_incremental_surfaces_skip_count(
+        self, rag_components: RagComponentsWithManifest, tmp_path: Path
+    ) -> None:
+        # Regression for review VIS-001: the scoped/incremental path (used by
+        # the watcher) must surface preprocess skip counts, not just full index.
+        from ... import CodebaseIndexer, VaultStore
+
+        model = rag_components["model"]
+        script = tmp_path / "boom.py"
+        script.write_text(_FAILING_EXTRACTOR, encoding="utf-8")
+        _write_config(
+            tmp_path,
+            f"[[rule]]\npattern = \"*.pdf\"\ncommand = '''{_command(script)}'''\n"
+            'on_error = "skip"\n',
+        )
+        broken = tmp_path / "broken.pdf"
+        broken.write_bytes(b"\x00\x01 binary")
+
+        store = VaultStore(tmp_path)
+        try:
+            indexer = CodebaseIndexer(tmp_path, model, store)
+            result = indexer.incremental_index(
+                reporter=NullProgressReporter(), changed_paths=[broken]
+            )
+            assert result.preprocess_skipped == 1
+            assert any("broken.pdf" in f for f in result.preprocess_failures)
+        finally:
+            store.close()

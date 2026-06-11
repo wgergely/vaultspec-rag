@@ -221,6 +221,36 @@ F1–F8.
   that would justify `tomlkit` round-trip writing); and a sidecar-cache warm-up path for
   OCR-class extractors.
 
+## Post-review amendments
+
+The code review (audit `2026-06-11-preprocess-hooks`) reconciled three decisions with the
+as-built implementation. These amendments are authoritative over the original decision text
+above:
+
+- **D12 (storage), amended.** Preprocessed units are stored in the existing `codebase_docs`
+  collection with extended `CodeChunk` payload (`source_path`, `preprocessor_id`, `anchor`,
+  split `locator_value_int`/`locator_value_str`), **not** a dedicated `preproc_docs`
+  collection. This was a deliberate, user-approved deviation: it keeps the single GPU
+  consumer and the embed/upsert/search seam untouched (the rule-critical invariant) and was
+  the smaller path to a tested v1. The review confirmed the overload is internally
+  consistent — no existing code-search filter breaks, and purge-by-source-path reconciles
+  via the existing `path`-keyed deletion. A dedicated collection remains a possible future
+  refinement.
+
+- **D7 (cache key), amended.** The cache key is `(source_hash, command, schema_version)`,
+  not `(source_hash, preprocessor_id, preprocessor_version, schema_version)`. The producing
+  `preprocessor_version` is known only from the output, so it cannot participate in a
+  read-time lookup; the rule's `command` is the project's invalidation lever (change the
+  command, or run a clean rebuild, to force re-extraction). A version bump that leaves the
+  command string unchanged will serve cached output until a clean rebuild — documented in
+  the hooks guide.
+
+- **D11 (failure visibility), amended.** `IndexResult` carries `preprocess_skipped` and
+  `preprocess_failures` (two fields, not three). `on_error=fail` aborts the run by raising
+  rather than incrementing a separate `preprocess_failed` counter, so that field and the
+  `!failed` summary token are intentionally absent. Skip counts are surfaced on **all**
+  index paths (full, incremental, scoped/watcher) and in the jobs summary and CLI `--json`.
+
 ## Codification candidates
 
 - **Rule slug:** `preprocessors-run-out-of-process`.

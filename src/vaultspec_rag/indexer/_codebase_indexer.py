@@ -285,6 +285,25 @@ class CodebaseIndexer:
             reason = res.preprocess_reason or "preprocessor skipped the file"
             self._prep_skips.append(f"{res.rel_path}: {reason}")
 
+    def _record_scoped_skip(
+        self,
+        path: pathlib.Path,
+        result: _chunk_worker.ScopedChunkResult,
+    ) -> None:
+        """Accumulate a scoped-path preprocess skip for failure visibility (D11).
+
+        The scoped/incremental path (used by the watcher) reports skips here so
+        coverage gaps are surfaced on every path, not just the full index
+        (review VIS-001).
+        """
+        if result.preprocess_status == "skipped":
+            try:
+                rel = str(path.relative_to(self.root_dir)).replace("\\", "/")
+            except ValueError:
+                rel = str(path)
+            reason = result.preprocess_reason or "preprocessor skipped the file"
+            self._prep_skips.append(f"{rel}: {reason}")
+
     def _scan_codebase(self) -> list[pathlib.Path]:
         """Scan codebase for supported source files.
 
@@ -496,17 +515,23 @@ class CodebaseIndexer:
 
         completed = 0
         ctx = multiprocessing.get_context("spawn")
+        prep = getattr(self, "_prep_ctx", None)
         try:
             with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
                 futures = {
                     pool.submit(
-                        _chunk_worker.chunk_file, p, self.root_dir, self._prep_ctx
+                        _chunk_worker.chunk_file_with_status,
+                        p,
+                        self.root_dir,
+                        prep,
                     ): p
                     for p in paths
                 }
                 for future in as_completed(futures):
                     try:
-                        all_chunks.extend(future.result())
+                        res = future.result()
+                        all_chunks.extend(res.chunks)
+                        self._record_scoped_skip(futures[future], res)
                     except BrokenProcessPool:
                         # Pool-level fatal - propagate rather than mis-record
                         # it as a single-file failure.
@@ -548,11 +573,12 @@ class CodebaseIndexer:
             All ``CodeChunk``s across every file, with empty vectors.
         """
         all_chunks: list[CodeChunk] = []
+        prep = getattr(self, "_prep_ctx", None)
         for p in paths:
             try:
-                all_chunks.extend(
-                    _chunk_worker.chunk_file(p, self.root_dir, self._prep_ctx)
-                )
+                res = _chunk_worker.chunk_file_with_status(p, self.root_dir, prep)
+                all_chunks.extend(res.chunks)
+                self._record_scoped_skip(p, res)
             except Exception:
                 logger.warning("Failed to chunk %s", p, exc_info=True)
             reporter.advance()
@@ -1210,6 +1236,8 @@ class CodebaseIndexer:
             duration_ms=duration_ms,
             device=self.model.device,
             files=len(to_index),
+            preprocess_skipped=len(self._prep_skips),
+            preprocess_failures=list(self._prep_skips),
         )
 
     def _scan_changed_paths(
@@ -1385,6 +1413,8 @@ class CodebaseIndexer:
             duration_ms=duration_ms,
             device=self.model.device,
             files=len(to_index),
+            preprocess_skipped=len(self._prep_skips),
+            preprocess_failures=list(self._prep_skips),
         )
 
     def _get_chunk_ids_for_files(

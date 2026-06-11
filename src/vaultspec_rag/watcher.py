@@ -53,6 +53,12 @@ _CODE_EXTENSIONS = frozenset(
         ".kt",
         ".lua",
         ".zig",
+        # Plain-text/markup tails added to LANGUAGE_MAP (#185 adjacent ask) so a
+        # watched edit to one triggers a reindex like any other source file.
+        ".txt",
+        ".xml",
+        ".xsd",
+        ".properties",
     }
 )
 

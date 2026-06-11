@@ -232,22 +232,38 @@ def _chunk_decoded(
     return chunk_with_splitter(content, rel_path, language)
 
 
-def chunk_file(
+@dataclass(slots=True)
+class ScopedChunkResult:
+    """A scoped-path file's chunks plus its preprocess disposition.
+
+    The scoped/incremental path hashes separately, so (unlike the full-index
+    ``FileChunkResult``) this carries no content hash - only the chunks and the
+    preprocess status/reason, so the orchestrator can surface skip counts on the
+    incremental and watcher paths too (#185 D11, review VIS-001).
+    """
+
+    chunks: list[CodeChunk]
+    preprocess_status: str | None = None
+    preprocess_reason: str | None = None
+
+
+def chunk_file_with_status(
     path: pathlib.Path,
     root_dir: pathlib.Path,
     prep: PreprocessContext | None = None,
-) -> list[CodeChunk]:
-    """Read a file, decode it once, and split it into AST-aware ``CodeChunk``s.
+) -> ScopedChunkResult:
+    """Chunk one file (scoped path), carrying back the preprocess disposition.
 
     This is the picklable process-pool entry point for the incremental and
     scoped paths (which hash separately). It performs only CPU work: a single
-    file read, tree-sitter parsing (or text-splitter fallback), and chunk
-    construction with empty vectors for the consumer to embed.
+    file read, optional preprocessing, tree-sitter parsing (or text-splitter
+    fallback), and chunk construction with empty vectors for the consumer to
+    embed.
 
-    When ``prep`` is supplied and a preprocess rule matches this file, the
-    matched preprocessor runs first (D6): on success its chunks are returned; on
-    a skip the file yields no chunks; on passthrough/no-match the raw file is
-    chunked normally.
+    When ``prep`` is supplied and a preprocess rule matches, the matched
+    preprocessor runs first (D6): on success its chunks are returned; on a skip
+    the file yields no chunks but the status/reason are reported; on
+    passthrough/no-match the raw file is chunked normally.
 
     Args:
         path: Absolute path to the source file.
@@ -255,26 +271,39 @@ def chunk_file(
         prep: Optional preprocess context (rules + cache + cap).
 
     Returns:
-        List of ``CodeChunk`` instances with empty vectors, or an empty list
-        when the file cannot be read/decoded or was preprocess-skipped.
+        A :class:`ScopedChunkResult` with the chunks and the preprocess status.
     """
     try:
         raw = path.read_bytes()
     except OSError as e:
         logger.warning("Cannot read %s: %s", path, e)
-        return []
+        return ScopedChunkResult([])
     if prep is not None:
         content_hash = hashlib.blake2b(raw).hexdigest()
         outcome = preprocess_file(content_hash, path, root_dir, prep)
         if outcome.status == "ok":
-            return outcome.chunks
+            return ScopedChunkResult(outcome.chunks, "ok")
         if outcome.status == "skipped":
-            return []
+            return ScopedChunkResult([], "skipped", outcome.reason)
         # "passthrough" / "none" fall through to ordinary chunking below.
     content = _decode_source(raw, path)
     if content is None:
-        return []
-    return _chunk_decoded(content, path, root_dir, _resolve_html_strip())
+        return ScopedChunkResult([])
+    chunks = _chunk_decoded(content, path, root_dir, _resolve_html_strip())
+    return ScopedChunkResult(chunks)
+
+
+def chunk_file(
+    path: pathlib.Path,
+    root_dir: pathlib.Path,
+    prep: PreprocessContext | None = None,
+) -> list[CodeChunk]:
+    """Chunk one file and return just its chunks (thin wrapper over status form).
+
+    Retained for callers and tests that only need the chunk list; the
+    chunk-identity logic lives in :func:`chunk_file_with_status`.
+    """
+    return chunk_file_with_status(path, root_dir, prep).chunks
 
 
 def chunk_and_hash_file(
