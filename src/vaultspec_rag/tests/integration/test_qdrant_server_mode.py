@@ -196,6 +196,121 @@ class TestServerModeRoundTrip:
             store_b.close()
 
 
+class TestServerModeDeletionEviction:
+    """Issue 192: a scoped incremental reindex must evict a deleted file's
+    data from the store in server mode, so search no longer surfaces it,
+    without a full rebuild. Every prior deletion test forced local mode;
+    these drive the real managed server.
+    """
+
+    def test_scoped_delete_evicts_code_chunks_and_search_in_server_mode(
+        self,
+        server_mode: QdrantSupervisor,  # noqa: ARG002  # activates the URL env seam
+        embedding_model: EmbeddingModel,
+        tmp_path: Path,
+    ) -> None:
+        """Deleting a code file then scoped-reindexing drops its chunks and
+        removes it from hybrid search, in server mode."""
+        from ... import CodebaseIndexer, VaultStore
+        from ...search import VaultSearcher
+
+        src = tmp_path / "src"
+        src.mkdir(parents=True)
+        keep = src / "keep_utils.py"
+        gone = src / "gone_utils.py"
+        keep.write_text(
+            '"""Kept module."""\n\n\n'
+            "def keep_sentinel() -> str:\n"
+            '    """Return the kept sentinel."""\n'
+            '    return "retained-keeptoken"\n',
+            encoding="utf-8",
+        )
+        gone.write_text(
+            '"""Doomed module."""\n\n\n'
+            "def gone_sentinel() -> str:\n"
+            '    """Return the doomed sentinel."""\n'
+            '    return "deleteme-uniquegonetoken"\n',
+            encoding="utf-8",
+        )
+
+        store = VaultStore(tmp_path)
+        try:
+            assert store._server_mode is True
+            code_indexer = CodebaseIndexer(tmp_path, embedding_model, store)
+            code_indexer.full_index(reporter=NullProgressReporter())
+
+            gone_rel = str(gone.relative_to(tmp_path)).replace("\\", "/")
+            assert code_indexer._get_chunk_ids_for_files({gone_rel}), (
+                "doomed file must have chunks before deletion (sanity)"
+            )
+
+            searcher = VaultSearcher(tmp_path, embedding_model, store)
+            assert any(
+                "gone_utils" in hit.path
+                for hit in searcher.search_codebase(
+                    "deleteme uniquegonetoken doomed sentinel", top_k=5
+                )
+            ), "doomed file must be searchable before deletion (sanity)"
+
+            gone.unlink()
+            result = code_indexer.incremental_index(
+                reporter=NullProgressReporter(),
+                changed_paths={gone},
+            )
+            assert result.removed == 1
+
+            assert not code_indexer._get_chunk_ids_for_files({gone_rel}), (
+                "deleted file's chunks must be evicted from the store (issue 192)"
+            )
+            keep_rel = str(keep.relative_to(tmp_path)).replace("\\", "/")
+            assert code_indexer._get_chunk_ids_for_files({keep_rel}), (
+                "kept file's chunks must remain"
+            )
+            assert not any(
+                "gone_utils" in hit.path
+                for hit in searcher.search_codebase(
+                    "deleteme uniquegonetoken doomed sentinel", top_k=5
+                )
+            ), "deleted file still returned by server-mode search (issue 192)"
+        finally:
+            store.close()
+
+    def test_scoped_delete_evicts_vault_doc_in_server_mode(
+        self,
+        server_mode: QdrantSupervisor,  # noqa: ARG002  # activates the URL env seam
+        embedding_model: EmbeddingModel,
+        tmp_path: Path,
+    ) -> None:
+        """Deleting a vault document then scoped-reindexing evicts it from
+        the vault collection, in server mode."""
+        from ... import VaultIndexer, VaultStore
+        from ...config import get_config
+
+        build_synthetic_vault(tmp_path, n_docs=6, seed=7)
+        store = VaultStore(tmp_path)
+        try:
+            assert store._server_mode is True
+            vault_indexer = VaultIndexer(tmp_path, embedding_model, store)
+            vault_indexer.full_index(reporter=NullProgressReporter())
+            before = store.count()
+            assert before > 0
+
+            docs_dir = tmp_path / get_config().docs_dir
+            doc = next(iter(sorted(docs_dir.rglob("*.md"))))
+            doc.unlink()
+
+            result = vault_indexer.incremental_index(
+                reporter=NullProgressReporter(),
+                changed_paths={doc},
+            )
+            assert result.removed >= 1
+            assert store.count() < before, (
+                "deleted vault document must reduce the stored count (issue 192)"
+            )
+        finally:
+            store.close()
+
+
 class TestSupervision:
     def test_stop_reaps_the_child(
         self,
