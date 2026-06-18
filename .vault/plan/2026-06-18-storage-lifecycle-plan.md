@@ -89,12 +89,12 @@ Harden every destructive path against out-of-scope destruction, path traversal, 
 
 Harden every destructive path against out-of-scope deletion, traversal, symlink escape, unknown-namespace deletion, live-data races, and auth bypass, with adversarial tests.
 
-- [ ] `W04.P06.S32` - Enforce that every destructive op operates only on the resolved root namespaces or managed storage tree and rejects roots outside the allowed base; `src/vaultspec_rag/service.py`.
-- [ ] `W04.P06.S33` - Reject path traversal and symlink escape in any path the surface deletes; `src/vaultspec_rag/service.py`.
-- [ ] `W04.P06.S34` - Guarantee prune and delete never remove unattributable unknown namespaces without an explicit separate gate; `src/vaultspec_rag/service.py`.
+- [x] `W04.P06.S32` - Enforce that every destructive op operates only on the resolved root namespaces or managed storage tree and rejects roots outside the allowed base; `src/vaultspec_rag/service.py`.
+- [x] `W04.P06.S33` - Reject path traversal and symlink escape in any path the surface deletes; `src/vaultspec_rag/service.py`.
+- [x] `W04.P06.S34` - Guarantee prune and delete never remove unattributable unknown namespaces without an explicit separate gate; `src/vaultspec_rag/service.py`.
 - [ ] `W04.P06.S35` - Verify refcount and store-lock checks run before any drop and that no deletion touches a live server storage file; `src/vaultspec_rag/store.py`.
 - [ ] `W04.P06.S36` - Confirm destructive routes are loopback and token gated and that control-plane verbs are absent from MCP; `src/vaultspec_rag/server/_routes.py`.
-- [ ] `W04.P06.S37` - Add an adversarial test suite covering out-of-scope deletion, traversal and symlink payloads, unknown-namespace, busy-root, and json-without-confirmation; `src/vaultspec_rag/tests/integration/test_storage_adversarial.py`.
+- [x] `W04.P06.S37` - Add an adversarial test suite covering out-of-scope deletion, traversal and symlink payloads, unknown-namespace, busy-root, and json-without-confirmation; `src/vaultspec_rag/tests/integration/test_storage_adversarial.py`.
 
 ## Wave `W05` - migrate
 
