@@ -1,12 +1,14 @@
-"""CLI commands for the ``server storage`` group: survey RAG index storage.
+"""CLI commands for the ``server storage`` group.
 
-Thin adapter over the service-domain ``storage_ops`` functions. The
-read-only ``survey`` connects to the managed Qdrant server, classifies
-every per-root namespace (live / orphaned / unknown) via the persisted
-prefix-to-root manifest, and renders a bounded, filterable view biased
-toward actionable (orphaned, unknown) state. Destructive verbs
-(prune/delete) are intentionally separate so this safe read path carries
-no confirmation machinery.
+Thin adapters over the service-domain ``storage_ops`` functions. ``survey``
+is a read-only, bounded view classifying every per-root namespace
+(live / orphaned / unknown) via the persisted prefix-to-root manifest.
+``delete`` removes one named namespace and ``prune`` reclaims every
+orphaned namespace; both are dry-run-first, require ``--yes`` to apply,
+emit ``--json`` (which requires ``--yes``), and exit 3 when the server is
+unreachable. Neither ever touches an ``unknown`` (unattributable)
+namespace - the safe default that makes accidental out-of-scope deletion
+impossible without an explicit manifest attribution.
 """
 
 from __future__ import annotations
@@ -19,9 +21,16 @@ from ._app import server_storage_app
 from ._render import _emit_json, _emit_json_error_and_exit
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from qdrant_client import QdrantClient
+
+    from ..storage_ops import DeleteResult, PruneResult
     from ..storage_survey import NamespaceSurvey
 
 _SURVEY_CMD = "server.storage.survey"
+_DELETE_CMD = "server.storage.delete"
+_PRUNE_CMD = "server.storage.prune"
 
 
 def _human_size(num_bytes: int) -> str:
@@ -33,47 +42,60 @@ def _human_size(num_bytes: int) -> str:
     return f"{size:.1f}TB"
 
 
-def _resolve_server_url(json_mode: bool) -> str:
-    """Return the managed Qdrant URL, or exit if server mode is off.
-
-    Exits 2 in local-only mode (nothing to reconcile). The URL is the
-    in-daemon ``qdrant_url`` when present, else the managed loopback port.
-    """
+def _resolve_server_url(command: str, json_mode: bool) -> str:
+    """Return the managed Qdrant URL, or exit 2 if server mode is off."""
     from ..config import get_config
 
     cfg = get_config()
     if not cfg.effective_server_mode():
         message = (
-            "Storage survey requires server mode. Local-only stores have a "
+            "Storage operations require server mode. Local-only stores have a "
             "single namespace and nothing to reconcile."
         )
         if json_mode:
-            _emit_json_error_and_exit(_SURVEY_CMD, "server_mode_required", message, 2)
+            _emit_json_error_and_exit(command, "server_mode_required", message, 2)
         typer.echo(message)
         raise typer.Exit(2)
     return str(getattr(cfg, "qdrant_url", "") or f"http://127.0.0.1:{cfg.qdrant_port}")
 
 
-def _gather_or_exit(url: str, json_mode: bool) -> list[NamespaceSurvey]:
-    """Survey the server, exiting 3 when it is unreachable."""
+def _run_storage_op[T](
+    command: str,
+    json_mode: bool,
+    fn: Callable[[QdrantClient], T],
+) -> T:
+    """Open a client to the managed server, run ``fn``, exit 3 if unreachable."""
     from qdrant_client import QdrantClient
 
-    from ..storage_ops import gather_survey, server_storage_collections_dir
-
+    url = _resolve_server_url(command, json_mode)
     client = QdrantClient(url=url)
     try:
-        return gather_survey(client, server_storage_collections_dir())
+        return fn(client)
     except (OSError, RuntimeError) as exc:
         message = (
             f"Could not reach the managed Qdrant server at {url}. Start the "
             "service with `vaultspec-rag server start`."
         )
         if json_mode:
-            _emit_json_error_and_exit(_SURVEY_CMD, "service_not_running", message, 3)
+            _emit_json_error_and_exit(command, "service_not_running", message, 3)
         typer.echo(message)
         raise typer.Exit(3) from exc
     finally:
         client.close()
+
+
+def _require_yes_for_json(command: str, json_mode: bool, yes: bool) -> None:
+    """Enforce that ``--json`` is paired with ``--yes`` (no prompt in a stream)."""
+    if json_mode and not yes:
+        _emit_json_error_and_exit(
+            command,
+            "json_requires_yes",
+            "--json requires --yes so no confirmation prompt corrupts the stream.",
+            2,
+        )
+
+
+# -- survey -----------------------------------------------------------------
 
 
 def _emit_survey_json(surveys: list[NamespaceSurvey]) -> None:
@@ -134,8 +156,13 @@ def storage_survey(
     ),
 ) -> None:
     """Survey the managed server's per-root index namespaces."""
-    url = _resolve_server_url(json_mode)
-    surveys = _gather_or_exit(url, json_mode)
+    from ..storage_ops import gather_survey, server_storage_collections_dir
+
+    surveys = _run_storage_op(
+        _SURVEY_CMD,
+        json_mode,
+        lambda c: gather_survey(c, server_storage_collections_dir()),
+    )
     if orphaned_only:
         surveys = [s for s in surveys if s.status == "orphaned"]
     if unknown_only:
@@ -144,3 +171,122 @@ def storage_survey(
         _emit_survey_json(surveys)
     else:
         _print_survey(surveys)
+
+
+# -- delete -----------------------------------------------------------------
+
+
+def _render_delete(result: DeleteResult, json_mode: bool) -> None:
+    if json_mode:
+        _emit_json(
+            True,
+            _DELETE_CMD,
+            data={
+                "prefix": result.prefix,
+                "status": result.status,
+                "collections": result.collections,
+                "reason": result.reason,
+            },
+        )
+        return
+    if result.status == "skipped":
+        typer.echo(f"Skipped {result.prefix}: {result.reason}")
+    elif result.status == "would_remove":
+        typer.echo(
+            f"Would remove {result.prefix} "
+            f"({len(result.collections)} collections). Re-run with --yes."
+        )
+    elif result.status == "removed":
+        typer.echo(f"Removed {result.prefix} ({len(result.collections)} collections).")
+    else:
+        typer.echo(f"Failed {result.prefix}: {result.reason}")
+
+
+@server_storage_app.command(
+    "delete",
+    help="Delete one named RAG namespace (its r{hash}_ prefix).",
+)
+def storage_delete(
+    prefix: str = typer.Argument(
+        ..., help="The namespace prefix to delete (r{hash}_)."
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Apply the deletion."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview without deleting."),
+    json_mode: bool = typer.Option(False, "--json", help="Emit JSON for scripts."),
+    allow_unknown: bool = typer.Option(
+        False,
+        "--allow-unknown",
+        help="Permit deleting a prefix the manifest cannot attribute (dangerous).",
+    ),
+) -> None:
+    """Delete a single per-root namespace from the managed server."""
+    from ..storage_ops import delete_prefix
+
+    _require_yes_for_json(_DELETE_CMD, json_mode, yes)
+    preview = dry_run or not yes
+    result = _run_storage_op(
+        _DELETE_CMD,
+        json_mode,
+        lambda c: delete_prefix(
+            c, prefix, dry_run=preview, allow_unknown=allow_unknown
+        ),
+    )
+    _render_delete(result, json_mode)
+    # A non-dry preview that found a target exits non-zero to signal "not applied".
+    if not dry_run and not yes and result.status == "would_remove":
+        raise typer.Exit(1)
+
+
+# -- prune ------------------------------------------------------------------
+
+
+def _render_prune(result: PruneResult, json_mode: bool) -> None:
+    if json_mode:
+        _emit_json(
+            True,
+            _PRUNE_CMD,
+            data={
+                "results": [
+                    {"prefix": r.prefix, "status": r.status, "reason": r.reason}
+                    for r in result.results
+                ],
+                "skipped_unknown": result.skipped_unknown,
+                "reclaimed_bytes": result.reclaimed_bytes,
+                "dry_run": result.dry_run,
+            },
+        )
+        return
+    verb = "Would reclaim" if result.dry_run else "Reclaimed"
+    typer.echo(
+        f"{verb} {len(result.results)} orphaned namespaces "
+        f"({_human_size(result.reclaimed_bytes)}); "
+        f"{len(result.skipped_unknown)} unknown left untouched."
+    )
+    for r in result.results:
+        typer.echo(f"  {r.status:<12} {r.prefix}")
+
+
+@server_storage_app.command(
+    "prune",
+    help="Reclaim every orphaned RAG namespace (source root gone).",
+)
+def storage_prune(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Apply the prune."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview without deleting."),
+    json_mode: bool = typer.Option(False, "--json", help="Emit JSON for scripts."),
+) -> None:
+    """Reclaim all orphaned namespaces; never touches unknown or live ones."""
+    from ..storage_ops import prune_orphaned, server_storage_collections_dir
+
+    _require_yes_for_json(_PRUNE_CMD, json_mode, yes)
+    preview = dry_run or not yes
+    result = _run_storage_op(
+        _PRUNE_CMD,
+        json_mode,
+        lambda c: prune_orphaned(
+            c, dry_run=preview, storage_dir=server_storage_collections_dir()
+        ),
+    )
+    _render_prune(result, json_mode)
+    if not dry_run and not yes and result.results:
+        raise typer.Exit(1)
