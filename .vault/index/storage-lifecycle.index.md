@@ -6,6 +6,7 @@ tags:
 date: '2026-06-18'
 related:
   - '[[2026-06-18-storage-lifecycle-adr]]'
+  - '[[2026-06-18-storage-lifecycle-plan]]'
   - '[[2026-06-18-storage-lifecycle-research]]'
 ---
 
@@ -17,7 +18,11 @@ Auto-generated index of all documents tagged with `#storage-lifecycle`.
 
 ### adr
 
-- `2026-06-18-storage-lifecycle-adr` - `storage-lifecycle` adr: `server-authoritative storage lifecycle surface` | (**status:** `proposed`)
+- `2026-06-18-storage-lifecycle-adr` - `storage-lifecycle` adr: `server-authoritative storage lifecycle surface` | (**status:** `accepted`)
+
+### plan
+
+- `2026-06-18-storage-lifecycle-plan` - `storage-lifecycle` plan
 
 ### research
 

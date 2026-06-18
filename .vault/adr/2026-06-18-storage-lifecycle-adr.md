@@ -11,7 +11,7 @@ related:
   - "[[2026-04-12-store-eviction-log-rotation-adr]]"
 ---
 
-# `storage-lifecycle` adr: `server-authoritative storage lifecycle surface` | (**status:** `proposed`)
+# `storage-lifecycle` adr: `server-authoritative storage lifecycle surface` | (**status:** `accepted`)
 
 ## Problem Statement
 
@@ -172,8 +172,10 @@ single out-of-scope deletion is unacceptable.
   to a known root through the persisted prefix->root manifest; unattributable namespaces are
   reported as unknown and require explicit, separately gated operator action.
 
-## Sign-off needed
+## Decided sign-offs
 
-- **Local-mode scope:** proposed treatment is "supported as single-root in-process
-  survey/delete; no cross-root orphan reconciliation (a server-mode capability)." Confirm,
-  or widen/narrow.
+- **Local-mode scope (decided):** local mode is supported as single-root, in-process
+  survey/delete operating on the one local store; #192 eviction applies there too.
+  Cross-root orphan reconciliation (prune) is a server-mode-only capability by design,
+  because a daemon-less local install has no shared tree to reconcile. This asymmetry is
+  documented, not a gap.
