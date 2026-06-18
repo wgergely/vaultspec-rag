@@ -9,6 +9,7 @@ related:
   - '[[2026-06-18-storage-lifecycle-W02-P02-S08]]'
   - '[[2026-06-18-storage-lifecycle-adr]]'
   - '[[2026-06-18-storage-lifecycle-plan]]'
+  - '[[2026-06-18-storage-lifecycle-reference]]'
   - '[[2026-06-18-storage-lifecycle-research]]'
 ---
 
@@ -30,6 +31,10 @@ Auto-generated index of all documents tagged with `#storage-lifecycle`.
 ### plan
 
 - `2026-06-18-storage-lifecycle-plan` - `storage-lifecycle` plan
+
+### reference
+
+- `2026-06-18-storage-lifecycle-reference` - `storage-lifecycle` reference: `migrate fast-tooling spike`
 
 ### research
 

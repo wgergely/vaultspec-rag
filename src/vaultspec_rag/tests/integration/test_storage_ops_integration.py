@@ -25,7 +25,12 @@ from ...qdrant_runtime import (
     resolve_binary,
 )
 from ...storage_manifest import record_root
-from ...storage_ops import delete_prefix, gather_survey, prune_orphaned
+from ...storage_ops import (
+    delete_prefix,
+    gather_survey,
+    migrate_collections,
+    prune_orphaned,
+)
 from ...store import root_collection_prefix
 
 if TYPE_CHECKING:
@@ -172,5 +177,44 @@ def test_delete_refuses_unknown_then_prune_keeps_it(
         assert _UNKNOWN_PREFIX in applied.skipped_unknown
         assert not client.collection_exists(f"{gone_pref}vault_docs")
         assert client.collection_exists(f"{_UNKNOWN_PREFIX}vault_docs")
+    finally:
+        client.close()
+
+
+@pytest.mark.usefixtures("isolated_status_dir")
+def test_migrate_remaps_name_and_copies_points(
+    ops_qdrant: QdrantSupervisor,
+) -> None:
+    from qdrant_client import QdrantClient
+
+    client = QdrantClient(url=ops_qdrant.url)
+    try:
+        _make_collection(client, "vault_docs")  # bare local-style source
+        name_map = {"vault_docs": "rdeadbeefcafe_vault_docs"}
+
+        # dry-run: plans, copies nothing.
+        preview = migrate_collections(client, client, name_map, dry_run=True)
+        assert preview[0].status == "would_migrate"
+        assert preview[0].points == 1
+        assert not client.collection_exists("rdeadbeefcafe_vault_docs")
+
+        # apply: target created with the remapped name and matching count.
+        applied = migrate_collections(client, client, name_map, dry_run=False)
+        assert applied[0].status == "migrated"
+        assert applied[0].points == 1
+        assert client.collection_exists("rdeadbeefcafe_vault_docs")
+        assert client.collection_exists("vault_docs")  # source left intact
+
+        # re-running skips an existing target (never overwrites).
+        again = migrate_collections(client, client, name_map, dry_run=False)
+        assert again[0].status == "skipped"
+        assert again[0].reason == "target_exists"
+
+        # a missing source is reported, not an error.
+        missing = migrate_collections(
+            client, client, {"nope_docs": "rfeedfeedfeed_docs"}, dry_run=False
+        )
+        assert missing[0].status == "skipped"
+        assert missing[0].reason == "no_such_source"
     finally:
         client.close()

@@ -22,15 +22,17 @@ from ._render import _emit_json, _emit_json_error_and_exit
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
     from qdrant_client import QdrantClient
 
-    from ..storage_ops import DeleteResult, PruneResult
+    from ..storage_ops import DeleteResult, MigrateResult, PruneResult
     from ..storage_survey import NamespaceSurvey
 
 _SURVEY_CMD = "server.storage.survey"
 _DELETE_CMD = "server.storage.delete"
 _PRUNE_CMD = "server.storage.prune"
+_MIGRATE_CMD = "server.storage.migrate"
 
 
 def _human_size(num_bytes: int) -> str:
@@ -290,3 +292,113 @@ def storage_prune(
     _render_prune(result, json_mode)
     if not dry_run and not yes and result.results:
         raise typer.Exit(1)
+
+
+# -- migrate ----------------------------------------------------------------
+
+
+def _local_store_path(root: str) -> Path:
+    from pathlib import Path
+
+    from ..config import get_config
+
+    cfg = get_config()
+    return Path(root).expanduser() / str(cfg.data_dir) / str(cfg.qdrant_dir)
+
+
+def _migrate_name_map(root: str, *, to_server: bool) -> dict[str, str]:
+    """Map source collection names to target names for the given direction."""
+    from ..store import VaultStore, root_collection_prefix
+
+    prefix = root_collection_prefix(root)
+    bases = (VaultStore.TABLE_NAME, VaultStore.CODE_TABLE_NAME)
+    if to_server:
+        return {base: f"{prefix}{base}" for base in bases}
+    return {f"{prefix}{base}": base for base in bases}
+
+
+def _render_migrate(results: list[MigrateResult], json_mode: bool) -> None:
+    if json_mode:
+        _emit_json(
+            True,
+            _MIGRATE_CMD,
+            data={
+                "results": [
+                    {
+                        "source": r.source,
+                        "target": r.target,
+                        "status": r.status,
+                        "points": r.points,
+                        "reason": r.reason,
+                    }
+                    for r in results
+                ]
+            },
+        )
+        return
+    for r in results:
+        suffix = f" ({r.reason})" if r.reason else ""
+        typer.echo(f"  {r.status:<14} {r.source} -> {r.target}  {r.points} pts{suffix}")
+
+
+@server_storage_app.command(
+    "migrate",
+    help="Migrate a root's index between local and server backends.",
+)
+def storage_migrate(
+    root: str = typer.Argument(..., help="The workspace root whose index to migrate."),
+    to_backend: str = typer.Option(
+        ..., "--to", help="Target backend: 'server' or 'local'."
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Apply the migration."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview without copying."),
+    json_mode: bool = typer.Option(False, "--json", help="Emit JSON for scripts."),
+) -> None:
+    """Copy a root's namespaced collections between the local and server stores."""
+    from qdrant_client import QdrantClient
+
+    from ..storage_ops import migrate_collections
+
+    _require_yes_for_json(_MIGRATE_CMD, json_mode, yes)
+    if to_backend not in ("server", "local"):
+        _emit_or_echo_error(
+            _MIGRATE_CMD,
+            "invalid_target",
+            "Use --to server or --to local.",
+            2,
+            json_mode,
+        )
+    to_server = to_backend == "server"
+    url = _resolve_server_url(_MIGRATE_CMD, json_mode)
+    name_map = _migrate_name_map(root, to_server=to_server)
+    local = QdrantClient(path=str(_local_store_path(root)))
+    server = QdrantClient(url=url)
+    src, dst = (local, server) if to_server else (server, local)
+    preview = dry_run or not yes
+    try:
+        results = migrate_collections(src, dst, name_map, dry_run=preview)
+    except (OSError, RuntimeError) as exc:
+        _emit_or_echo_error(
+            _MIGRATE_CMD,
+            "migrate_failed",
+            f"Migration failed: {exc}",
+            1,
+            json_mode,
+        )
+        raise typer.Exit(1) from exc
+    finally:
+        local.close()
+        server.close()
+    _render_migrate(results, json_mode)
+    if not dry_run and not yes and any(r.status == "would_migrate" for r in results):
+        raise typer.Exit(1)
+
+
+def _emit_or_echo_error(
+    command: str, error: str, message: str, code: int, json_mode: bool
+) -> None:
+    """Emit a JSON error or echo it, then exit with ``code``."""
+    if json_mode:
+        _emit_json_error_and_exit(command, error, message, code)
+    typer.echo(message)
+    raise typer.Exit(code)

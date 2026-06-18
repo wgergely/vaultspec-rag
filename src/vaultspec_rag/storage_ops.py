@@ -24,7 +24,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from .storage_manifest import load_manifest, remove_prefix
 from .storage_survey import NamespaceSurvey, classify_namespaces
@@ -34,10 +34,12 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DeleteResult",
+    "MigrateResult",
     "PruneResult",
     "collection_footprints",
     "delete_prefix",
     "gather_survey",
+    "migrate_collections",
     "prune_orphaned",
     "server_storage_collections_dir",
 ]
@@ -57,6 +59,25 @@ class DeleteResult:
     prefix: str
     status: str
     collections: list[str] = field(default_factory=list)
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class MigrateResult:
+    """Outcome of migrating one collection between backends.
+
+    Attributes:
+        source: Source collection name.
+        target: Target collection name (may differ: prefix remap).
+        status: ``migrated`` / ``would_migrate`` / ``skipped`` / ``failed``.
+        points: Points copied (or that would be), verified by count.
+        reason: Why skipped or failed, else ``None``.
+    """
+
+    source: str
+    target: str
+    status: str
+    points: int = 0
     reason: str | None = None
 
 
@@ -229,3 +250,111 @@ def prune_orphaned(
         if result.status in ("removed", "would_remove"):
             reclaimed += survey.footprint_bytes
     return PruneResult(results, unknown, reclaimed, dry_run)
+
+
+def _copy_collection(
+    src_client: QdrantClient,
+    dst_client: QdrantClient,
+    source: str,
+    target: str,
+    batch_size: int,
+) -> int:
+    """Recreate ``target`` from ``source``'s schema and copy all points.
+
+    Returns the destination point count after the copy. Recreates the
+    named dense + sparse vector schema from the source config (payload
+    indexes are re-added by the store's ``ensure_*`` on next open), then
+    pages ``scroll(with_vectors=True)`` into ``upload_points``.
+    """
+    from qdrant_client import models
+
+    config = src_client.get_collection(source).config
+    dst_client.create_collection(
+        collection_name=target,
+        vectors_config=config.params.vectors,
+        sparse_vectors_config=config.params.sparse_vectors,
+    )
+    offset = None
+    while True:
+        records, offset = src_client.scroll(
+            collection_name=source,
+            limit=batch_size,
+            offset=offset,
+            with_payload=True,
+            with_vectors=True,
+        )
+        if records:
+            dst_client.upload_points(
+                collection_name=target,
+                points=[
+                    models.PointStruct(
+                        id=record.id,
+                        # scroll returns the *output* vector type; PointStruct
+                        # wants the *input* type. They are runtime-identical
+                        # (named dense + sparse dict), so the cast is a stub
+                        # reconciliation, not a behavioural change.
+                        vector=cast("models.VectorStruct", record.vector or {}),
+                        payload=record.payload,
+                    )
+                    for record in records
+                ],
+                wait=True,
+            )
+        if offset is None:
+            break
+    return int(dst_client.count(collection_name=target).count)
+
+
+def migrate_collections(
+    src_client: QdrantClient,
+    dst_client: QdrantClient,
+    name_map: dict[str, str],
+    *,
+    dry_run: bool,
+    batch_size: int = 256,
+) -> list[MigrateResult]:
+    """Migrate collections from one backend to another, remapping names.
+
+    ``name_map`` maps each source collection name to its target name (the
+    prefix remap between bare local names and ``r{hash}_`` server names).
+    Recreates each target's schema from the source, copies all points, and
+    verifies the destination count equals the source. A pre-existing
+    target is skipped (never silently overwritten).
+
+    Args:
+        src_client: Source backend client.
+        dst_client: Destination backend client.
+        name_map: Source-name to target-name mapping.
+        dry_run: When True, return the plan and mutate nothing.
+        batch_size: Scroll/upload page size.
+
+    Returns:
+        One :class:`MigrateResult` per mapped collection.
+    """
+    results: list[MigrateResult] = []
+    for source, target in name_map.items():
+        if not src_client.collection_exists(source):
+            results.append(
+                MigrateResult(source, target, "skipped", reason="no_such_source")
+            )
+            continue
+        expected = int(src_client.count(collection_name=source).count)
+        if dst_client.collection_exists(target):
+            results.append(
+                MigrateResult(source, target, "skipped", expected, "target_exists")
+            )
+            continue
+        if dry_run:
+            results.append(MigrateResult(source, target, "would_migrate", expected))
+            continue
+        try:
+            copied = _copy_collection(
+                src_client, dst_client, source, target, batch_size
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            results.append(MigrateResult(source, target, "failed", reason=str(exc)))
+            continue
+        status = "migrated" if copied == expected else "failed"
+        reason = None if copied == expected else f"count_mismatch:{copied}!={expected}"
+        results.append(MigrateResult(source, target, status, copied, reason))
+    return results
