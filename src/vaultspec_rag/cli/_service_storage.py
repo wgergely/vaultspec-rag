@@ -371,7 +371,19 @@ def storage_migrate(
     to_server = to_backend == "server"
     url = _resolve_server_url(_MIGRATE_CMD, json_mode)
     name_map = _migrate_name_map(root, to_server=to_server)
-    local = QdrantClient(path=str(_local_store_path(root)))
+    # Data-safety: the local store path must resolve inside the root (rejects
+    # traversal / symlink escape from a crafted data-dir config) before we open
+    # or write any on-disk store.
+    from ..storage_safety import StorageSafetyError, resolve_within
+
+    local_path = _local_store_path(root)
+    try:
+        resolve_within(local_path, root)
+    except StorageSafetyError as exc:
+        _emit_or_echo_error(
+            _MIGRATE_CMD, "unsafe_path", f"Refusing migrate: {exc}", 2, json_mode
+        )
+    local = QdrantClient(path=str(local_path))
     server = QdrantClient(url=url)
     src, dst = (local, server) if to_server else (server, local)
     preview = dry_run or not yes

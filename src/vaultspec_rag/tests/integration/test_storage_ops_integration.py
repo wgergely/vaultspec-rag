@@ -182,6 +182,49 @@ def test_delete_refuses_unknown_then_prune_keeps_it(
 
 
 @pytest.mark.usefixtures("isolated_status_dir")
+def test_prune_removes_only_orphaned_never_live_or_unknown(
+    ops_qdrant: QdrantSupervisor,
+    tmp_path: Path,
+) -> None:
+    """The out-of-scope-protection invariant: with live, orphaned, and unknown
+    namespaces all present, prune removes only the orphaned one - the live and
+    unknown namespaces survive untouched."""
+    from qdrant_client import QdrantClient
+
+    client = QdrantClient(url=ops_qdrant.url)
+    try:
+        live_root = tmp_path / "live"
+        gone_root = tmp_path / "gone"
+        live_root.mkdir()
+        gone_root.mkdir()
+        live_pref = root_collection_prefix(live_root)
+        gone_pref = root_collection_prefix(gone_root)
+        record_root(live_root, backend="server")
+        record_root(gone_root, backend="server")
+        gone_root.rmdir()  # orphaned
+
+        _make_collection(client, f"{live_pref}vault_docs")
+        _make_collection(client, f"{gone_pref}vault_docs")
+        _make_collection(client, f"{_UNKNOWN_PREFIX}vault_docs")  # unknown
+
+        applied = prune_orphaned(client, dry_run=False)
+
+        # Only the orphaned namespace was removed.
+        assert [r.prefix for r in applied.results if r.status == "removed"] == [
+            gone_pref
+        ]
+        assert _UNKNOWN_PREFIX in applied.skipped_unknown
+        # Live and unknown both survive; orphaned is gone.
+        assert client.collection_exists(f"{live_pref}vault_docs"), "live must survive"
+        assert client.collection_exists(f"{_UNKNOWN_PREFIX}vault_docs"), (
+            "unknown must survive"
+        )
+        assert not client.collection_exists(f"{gone_pref}vault_docs")
+    finally:
+        client.close()
+
+
+@pytest.mark.usefixtures("isolated_status_dir")
 def test_ensure_table_records_manifest_and_survey_shows_live(
     ops_qdrant: QdrantSupervisor,
     tmp_path: Path,
