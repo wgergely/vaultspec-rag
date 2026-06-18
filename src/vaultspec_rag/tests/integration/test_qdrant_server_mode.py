@@ -11,6 +11,7 @@ same server, and shutdown reaps the child with no orphaned process.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import os
 import socket
@@ -308,6 +309,165 @@ class TestServerModeDeletionEviction:
                 "deleted vault document must reduce the stored count (issue 192)"
             )
         finally:
+            store.close()
+
+
+class TestServerModeWatcherEviction:
+    """Issue 192 through the real watcher: deleting a file on disk while the
+    watcher runs must evict it from search in server mode, end to end. This
+    drives the actual ``awatch`` -> classify -> pending-set -> scoped
+    incremental path the operator hits, not a direct indexer call.
+    """
+
+    async def test_watcher_evicts_deleted_vault_doc_in_server_mode(
+        self,
+        server_mode: QdrantSupervisor,  # noqa: ARG002  # activates the URL env seam
+        embedding_model: EmbeddingModel,
+        tmp_path: Path,
+    ) -> None:
+        from ... import CodebaseIndexer, VaultIndexer, VaultStore
+        from ...graph_cache import GraphCache
+        from ...watcher import watch_and_reindex
+
+        vault_dir = tmp_path / ".vault"
+        adr_dir = vault_dir / "adr"
+        adr_dir.mkdir(parents=True)
+        (adr_dir / "init.md").write_text(
+            "---\ntags: ['#adr', '#initial']\ndate: '2026-06-18'\n"
+            "related: []\ntitle: Init\n---\n# Init\n\nInitial body.\n",
+            encoding="utf-8",
+        )
+        doomed = adr_dir / "doomed.md"
+        doomed.write_text(
+            "---\ntags: ['#adr', '#doomed']\ndate: '2026-06-18'\n"
+            "related: []\ntitle: Doomed\n---\n# Doomed\n\n"
+            "This doomed decision mentions uniquewatchertoken repeatedly.\n",
+            encoding="utf-8",
+        )
+
+        store = VaultStore(tmp_path)
+        vault_indexer = VaultIndexer(tmp_path, embedding_model, store)
+        code_indexer = CodebaseIndexer(tmp_path, embedding_model, store)
+        graph_cache = GraphCache()
+        vault_indexer.full_index(reporter=NullProgressReporter())
+
+        q_vec = embedding_model.encode_query(
+            "uniquewatchertoken doomed decision"
+        ).tolist()
+
+        def _hits() -> bool:
+            results = store.hybrid_search(
+                query_vector=q_vec,
+                _query_text="uniquewatchertoken doomed decision",
+                limit=10,
+            )
+            return any("uniquewatchertoken" in r.get("content", "") for r in results)
+
+        assert _hits(), "doomed doc must be searchable before deletion (sanity)"
+
+        stop_event = asyncio.Event()
+        watcher_task = asyncio.create_task(
+            watch_and_reindex(
+                root_dir=tmp_path,
+                vault_dir=vault_dir,
+                vault_indexer=vault_indexer,
+                code_indexer=code_indexer,
+                stop_event=stop_event,
+                graph_cache=graph_cache,
+                debounce=50,
+                cooldown=0.1,
+            )
+        )
+        try:
+            await asyncio.sleep(0.2)
+            doomed.unlink()
+            for _ in range(50):  # up to ~5s
+                await asyncio.sleep(0.1)
+                if not _hits():
+                    break
+            else:
+                pytest.fail(
+                    "watcher did not evict the deleted doc from server-mode "
+                    "search within timeout (issue 192)"
+                )
+        finally:
+            stop_event.set()
+            await watcher_task
+            store.close()
+
+    async def test_watcher_evicts_deleted_code_file_in_server_mode(
+        self,
+        server_mode: QdrantSupervisor,  # noqa: ARG002  # activates the URL env seam
+        embedding_model: EmbeddingModel,
+        tmp_path: Path,
+    ) -> None:
+        """The user's exact scenario: a deleted code file must drop out of
+        code search after the watcher's scoped reindex, in server mode."""
+        from ... import CodebaseIndexer, VaultIndexer, VaultStore
+        from ...graph_cache import GraphCache
+        from ...search import VaultSearcher
+        from ...watcher import watch_and_reindex
+
+        vault_dir = tmp_path / ".vault"
+        vault_dir.mkdir(parents=True)
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "keep_mod.py").write_text(
+            '"""Kept."""\n\n\ndef keep() -> str:\n    return "retained"\n',
+            encoding="utf-8",
+        )
+        gone = src / "gone_mod.py"
+        gone.write_text(
+            '"""Doomed."""\n\n\ndef gone() -> str:\n'
+            '    return "uniquecodewatchertoken"\n',
+            encoding="utf-8",
+        )
+
+        store = VaultStore(tmp_path)
+        vault_indexer = VaultIndexer(tmp_path, embedding_model, store)
+        code_indexer = CodebaseIndexer(tmp_path, embedding_model, store)
+        graph_cache = GraphCache()
+        code_indexer.full_index(reporter=NullProgressReporter())
+        searcher = VaultSearcher(tmp_path, embedding_model, store)
+
+        def _hits() -> bool:
+            return any(
+                "gone_mod" in hit.path
+                for hit in searcher.search_codebase(
+                    "uniquecodewatchertoken doomed", top_k=5
+                )
+            )
+
+        assert _hits(), "doomed code file must be searchable before deletion (sanity)"
+
+        stop_event = asyncio.Event()
+        watcher_task = asyncio.create_task(
+            watch_and_reindex(
+                root_dir=tmp_path,
+                vault_dir=vault_dir,
+                vault_indexer=vault_indexer,
+                code_indexer=code_indexer,
+                stop_event=stop_event,
+                graph_cache=graph_cache,
+                debounce=50,
+                cooldown=0.1,
+            )
+        )
+        try:
+            await asyncio.sleep(0.2)
+            gone.unlink()
+            for _ in range(50):  # up to ~5s
+                await asyncio.sleep(0.1)
+                if not _hits():
+                    break
+            else:
+                pytest.fail(
+                    "watcher did not evict the deleted code file from "
+                    "server-mode search within timeout (issue 192)"
+                )
+        finally:
+            stop_event.set()
+            await watcher_task
             store.close()
 
 
