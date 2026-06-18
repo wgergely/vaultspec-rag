@@ -182,6 +182,52 @@ def test_delete_refuses_unknown_then_prune_keeps_it(
 
 
 @pytest.mark.usefixtures("isolated_status_dir")
+def test_ensure_table_records_manifest_and_survey_shows_live(
+    ops_qdrant: QdrantSupervisor,
+    tmp_path: Path,
+) -> None:
+    """Opening a server-mode store and ensuring its table records the root in
+    the manifest, so a subsequent survey classifies it live (not unknown)."""
+    import os
+
+    from qdrant_client import QdrantClient
+
+    from ...config import EnvVar, reset_config
+    from ...storage_manifest import load_manifest
+    from ...store import VaultStore, root_collection_prefix
+
+    root = tmp_path / "live-project"
+    root.mkdir()
+    prev = os.environ.get(EnvVar.QDRANT_URL.value)
+    os.environ[EnvVar.QDRANT_URL.value] = ops_qdrant.url
+    reset_config()
+    try:
+        store = VaultStore(root)
+        try:
+            assert store._server_mode is True
+            store.ensure_table()
+        finally:
+            store.close()
+
+        prefix = root_collection_prefix(root)
+        assert prefix in load_manifest(), "ensure_table must record the manifest"
+
+        client = QdrantClient(url=ops_qdrant.url)
+        try:
+            surveys = {s.prefix: s for s in gather_survey(client)}
+            assert surveys[prefix].status == "live"
+            assert surveys[prefix].root == str(root.resolve())
+        finally:
+            client.close()
+    finally:
+        if prev is None:
+            os.environ.pop(EnvVar.QDRANT_URL.value, None)
+        else:
+            os.environ[EnvVar.QDRANT_URL.value] = prev
+        reset_config()
+
+
+@pytest.mark.usefixtures("isolated_status_dir")
 def test_migrate_remaps_name_and_copies_points(
     ops_qdrant: QdrantSupervisor,
 ) -> None:

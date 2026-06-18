@@ -632,10 +632,33 @@ class VaultStore:
                 logger.info("Dropped collection '%s'", self.CODE_TABLE_NAME)
             self._code_ensured = False
 
+    def _record_manifest(self) -> None:
+        """Record this root in the storage manifest (server mode only).
+
+        Populates the prefix-to-root attribution the storage survey/prune
+        surface needs to classify a namespace as live or orphaned. Called
+        whenever a collection is ensured; the manifest write is idempotent
+        (skipped when unchanged), so it is cheap on the hot path. A manifest
+        failure is logged, never raised - it must not break indexing.
+        """
+        if not self._server_mode:
+            return
+        try:
+            from .storage_manifest import record_root
+
+            record_root(self.root_dir, backend="server")
+        except OSError:
+            logger.debug(
+                "could not record storage manifest for %s",
+                self.root_dir,
+                exc_info=True,
+            )
+
     def ensure_table(self) -> None:
         """Create the vault_docs collection if it doesn't exist."""
         from qdrant_client import models
 
+        self._record_manifest()
         with self._lifecycle_lock:
             if self._vault_ensured:
                 return
@@ -667,6 +690,7 @@ class VaultStore:
         """Create the codebase_docs collection if it doesn't exist."""
         from qdrant_client import models
 
+        self._record_manifest()
         with self._lifecycle_lock:
             if self._code_ensured:
                 return

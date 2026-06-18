@@ -192,6 +192,17 @@ def record_root(
     )
     with _LOCK:
         entries = load_manifest()
+        existing = entries.get(prefix)
+        # Idempotent: skip the disk write when nothing changed, so frequent
+        # callers (e.g. a store-open hook) do not churn the manifest. A
+        # caller stamping a fresh last_indexed always writes.
+        if (
+            existing is not None
+            and existing.root == resolved
+            and existing.backend == backend
+            and not last_indexed
+        ):
+            return existing
         entries[prefix] = entry
         _write_manifest(entries)
     return entry
