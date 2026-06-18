@@ -35,9 +35,9 @@ Introduce the persisted prefix-to-root manifest that makes namespace attribution
 
 Introduce a durable manifest mapping each collection prefix to its resolved root so namespaces can be attributed and classified safely.
 
-- [ ] `W02.P02.S06` - Define the prefix-to-root manifest schema and its on-disk location under the managed service directory; `src/vaultspec_rag/registry.py`.
+- [x] `W02.P02.S06` - Define the prefix-to-root manifest schema and its on-disk location under the managed service directory; `src/vaultspec_rag/registry.py`.
 - [ ] `W02.P02.S07` - Write and update the manifest entry whenever a root is indexed; `src/vaultspec_rag/api.py`.
-- [ ] `W02.P02.S08` - Add a manifest read and reverse-map helper resolving a collection prefix to its root; `src/vaultspec_rag/registry.py`.
+- [x] `W02.P02.S08` - Add a manifest read and reverse-map helper resolving a collection prefix to its root; `src/vaultspec_rag/registry.py`.
 - [ ] `W02.P02.S09` - Reconcile the manifest on service start and on root rename or move; `src/vaultspec_rag/server/_lifespan.py`.
 - [ ] `W02.P02.S10` - Add unit and real-backend tests for manifest write, read, and reverse-map; `src/vaultspec_rag/tests/integration/test_storage_manifest.py`.
 
