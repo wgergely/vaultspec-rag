@@ -36,7 +36,7 @@ Introduce the persisted prefix-to-root manifest that makes namespace attribution
 Introduce a durable manifest mapping each collection prefix to its resolved root so namespaces can be attributed and classified safely.
 
 - [x] `W02.P02.S06` - Define the prefix-to-root manifest schema and its on-disk location under the managed service directory; `src/vaultspec_rag/registry.py`.
-- [ ] `W02.P02.S07` - Write and update the manifest entry whenever a root is indexed; `src/vaultspec_rag/api.py`.
+- [x] `W02.P02.S07` - Write and update the manifest entry whenever a root is indexed; `src/vaultspec_rag/api.py`.
 - [x] `W02.P02.S08` - Add a manifest read and reverse-map helper resolving a collection prefix to its root; `src/vaultspec_rag/registry.py`.
 - [ ] `W02.P02.S09` - Reconcile the manifest on service start and on root rename or move; `src/vaultspec_rag/server/_lifespan.py`.
 - [ ] `W02.P02.S10` - Add unit and real-backend tests for manifest write, read, and reverse-map; `src/vaultspec_rag/tests/integration/test_storage_manifest.py`.
@@ -45,15 +45,15 @@ Introduce a durable manifest mapping each collection prefix to its resolved root
 
 Expose a bounded, filterable read-only survey of stored namespaces over a service endpoint, the CLI, and a read-only MCP tool.
 
-- [ ] `W02.P03.S11` - Implement a service-domain survey function that enumerates namespaces, joins the manifest, and classifies live, orphaned, and unknown; `src/vaultspec_rag/service.py`.
-- [ ] `W02.P03.S12` - Compute daemon-side byte footprint for each namespace from the server storage tree; `src/vaultspec_rag/service.py`.
+- [x] `W02.P03.S11` - Implement a service-domain survey function that enumerates namespaces, joins the manifest, and classifies live, orphaned, and unknown; `src/vaultspec_rag/service.py`.
+- [x] `W02.P03.S12` - Compute daemon-side byte footprint for each namespace from the server storage tree; `src/vaultspec_rag/service.py`.
 - [ ] `W02.P03.S13` - Add a gated GET storage route, bounded and filterable, and register it in the route table; `src/vaultspec_rag/server/_routes.py`.
-- [ ] `W02.P03.S14` - Create the storage CLI group and a survey command with bounded filters and json output; `src/vaultspec_rag/cli/_service_storage.py`.
+- [x] `W02.P03.S14` - Create the storage CLI group and a survey command with bounded filters and json output; `src/vaultspec_rag/cli/_service_storage.py`.
 - [ ] `W02.P03.S15` - Wire the storage group into the CLI app and import registration; `src/vaultspec_rag/cli/_app.py`.
 - [ ] `W02.P03.S16` - Add the CLI-to-service survey HTTP adapter handling the not-running case; `src/vaultspec_rag/cli/_http_search.py`.
 - [ ] `W02.P03.S17` - Add a single-root in-process survey path for local mode; `src/vaultspec_rag/cli/_service_storage.py`.
 - [ ] `W02.P03.S18` - Add a read-only survey MCP tool delegating to the service; `src/vaultspec_rag/mcp/_admin_tools.py`.
-- [ ] `W02.P03.S19` - Add real-backend survey tests for server and local classifying live, orphaned, and unknown; `src/vaultspec_rag/tests/integration/test_storage_survey.py`.
+- [x] `W02.P03.S19` - Add real-backend survey tests for server and local classifying live, orphaned, and unknown; `src/vaultspec_rag/tests/integration/test_storage_survey.py`.
 
 ## Wave `W03` - prune and delete destructive verbs
 
@@ -63,23 +63,23 @@ Add the destructive control-plane verbs: per-root delete and orphaned-namespace 
 
 Add a per-root delete that releases the in-memory slot, then drops the root namespaced collections or local store, gated by dry-run and confirmation.
 
-- [ ] `W03.P04.S20` - Implement a service-domain delete that releases the in-memory slot before dropping data and returns busy when the root is in use; `src/vaultspec_rag/service.py`.
-- [ ] `W03.P04.S21` - Drop the root namespaced collections in server mode and remove the local store tree only when the store is confirmed closed; `src/vaultspec_rag/store.py`.
+- [x] `W03.P04.S20` - Implement a service-domain delete that releases the in-memory slot before dropping data and returns busy when the root is in use; `src/vaultspec_rag/service.py`.
+- [x] `W03.P04.S21` - Drop the root namespaced collections in server mode and remove the local store tree only when the store is confirmed closed; `src/vaultspec_rag/store.py`.
 - [ ] `W03.P04.S22` - Add a gated POST storage delete route and register it; `src/vaultspec_rag/server/_routes.py`.
-- [ ] `W03.P04.S23` - Add a storage delete CLI command with a required explicit target, dry-run preview, confirmation, and json; `src/vaultspec_rag/cli/_service_storage.py`.
+- [x] `W03.P04.S23` - Add a storage delete CLI command with a required explicit target, dry-run preview, confirmation, and json; `src/vaultspec_rag/cli/_service_storage.py`.
 - [ ] `W03.P04.S24` - Add the CLI-to-service delete HTTP adapter; `src/vaultspec_rag/cli/_http_search.py`.
-- [ ] `W03.P04.S25` - Drop the manifest entry on delete; `src/vaultspec_rag/registry.py`.
-- [ ] `W03.P04.S26` - Add real-backend delete tests for server and local including the busy-root path; `src/vaultspec_rag/tests/integration/test_storage_delete.py`.
+- [x] `W03.P04.S25` - Drop the manifest entry on delete; `src/vaultspec_rag/registry.py`.
+- [x] `W03.P04.S26` - Add real-backend delete tests for server and local including the busy-root path; `src/vaultspec_rag/tests/integration/test_storage_delete.py`.
 
 ### Phase `W03.P05` - prune orphaned namespaces
 
 Add a server-mode prune that reclaims namespaces whose manifest root has vanished, never touching unattributable unknown namespaces.
 
-- [ ] `W03.P05.S27` - Implement a service-domain prune that selects orphaned namespaces from the manifest and never targets unknown namespaces; `src/vaultspec_rag/service.py`.
+- [x] `W03.P05.S27` - Implement a service-domain prune that selects orphaned namespaces from the manifest and never targets unknown namespaces; `src/vaultspec_rag/service.py`.
 - [ ] `W03.P05.S28` - Add a gated POST storage prune route and register it; `src/vaultspec_rag/server/_routes.py`.
-- [ ] `W03.P05.S29` - Add a storage prune CLI command with a dry-run preview of exact targets, confirmation, and json; `src/vaultspec_rag/cli/_service_storage.py`.
+- [x] `W03.P05.S29` - Add a storage prune CLI command with a dry-run preview of exact targets, confirmation, and json; `src/vaultspec_rag/cli/_service_storage.py`.
 - [ ] `W03.P05.S30` - Add the CLI-to-service prune HTTP adapter; `src/vaultspec_rag/cli/_http_search.py`.
-- [ ] `W03.P05.S31` - Add a real-backend prune test that creates an orphaned namespace and asserts it is reclaimed while unknown namespaces are untouched; `src/vaultspec_rag/tests/integration/test_storage_prune.py`.
+- [x] `W03.P05.S31` - Add a real-backend prune test that creates an orphaned namespace and asserts it is reclaimed while unknown namespaces are untouched; `src/vaultspec_rag/tests/integration/test_storage_prune.py`.
 
 ## Wave `W04` - adversarial and data-safety hardening
 
@@ -104,19 +104,19 @@ Implement migrate last: a bounded research spike selects the fastest C-backed Py
 
 Run a bounded research spike to select the most capable C-backed Python tooling for ultrafast bulk vector and payload movement, recorded as a reference.
 
-- [ ] `W05.P07.S38` - Research and select the most capable C-backed Python tooling for ultrafast bulk vector and payload movement and record a reference document; `.vault/reference/2026-06-18-storage-lifecycle-migrate-tooling-reference.md`.
+- [x] `W05.P07.S38` - Research and select the most capable C-backed Python tooling for ultrafast bulk vector and payload movement and record a reference document; `.vault/reference/2026-06-18-storage-lifecycle-migrate-tooling-reference.md`.
 
 ### Phase `W05.P08` - migrate implementation
 
 Implement migrate to relocate and convert a root index between backends using the selected tooling, reusing the single GPU consumer when re-embedding.
 
-- [ ] `W05.P08.S39` - Implement a service-domain migrate that relocates and converts a root index between local and server backends using the selected tooling; `src/vaultspec_rag/service.py`.
+- [x] `W05.P08.S39` - Implement a service-domain migrate that relocates and converts a root index between local and server backends using the selected tooling; `src/vaultspec_rag/service.py`.
 - [ ] `W05.P08.S40` - Reuse the single GPU consumer pipeline when migrate must re-embed and keep all storage IO outside the GPU lock; `src/vaultspec_rag/service.py`.
 - [ ] `W05.P08.S41` - Add a gated POST storage migrate route and register it; `src/vaultspec_rag/server/_routes.py`.
-- [ ] `W05.P08.S42` - Add a storage migrate CLI command with dry-run, confirmation, and json; `src/vaultspec_rag/cli/_service_storage.py`.
+- [x] `W05.P08.S42` - Add a storage migrate CLI command with dry-run, confirmation, and json; `src/vaultspec_rag/cli/_service_storage.py`.
 - [ ] `W05.P08.S43` - Add the CLI-to-service migrate HTTP adapter; `src/vaultspec_rag/cli/_http_search.py`.
 - [ ] `W05.P08.S44` - Re-key the manifest prefix, root, and backend on migrate; `src/vaultspec_rag/registry.py`.
-- [ ] `W05.P08.S45` - Add a real-backend migrate round-trip test between local and server with an integrity check; `src/vaultspec_rag/tests/integration/test_storage_migrate.py`.
+- [x] `W05.P08.S45` - Add a real-backend migrate round-trip test between local and server with an integrity check; `src/vaultspec_rag/tests/integration/test_storage_migrate.py`.
 
 ## Description
 
