@@ -11,7 +11,7 @@ helper against the real token gate - no mocks, patches, or skips.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -83,7 +83,8 @@ def test_jobs_via_port_refreshes_stale_status_token_from_health(
             # Corrupt the persisted token so it no longer matches the running
             # service; pid/port stay valid so the status read still resolves.
             sf = _status_file()
-            data = json.loads(sf.read_text(encoding="utf-8")) if sf.exists() else {}
+            raw = sf.read_text(encoding="utf-8") if sf.exists() else "{}"
+            data: dict[str, object] = cast("dict[str, object]", json.loads(raw))
             data.setdefault("pid", pid)
             data.setdefault("port", port)
             data["service_token"] = "stale-wrong-token-deadbeefdeadbeef"

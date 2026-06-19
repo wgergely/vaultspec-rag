@@ -160,30 +160,25 @@ def _do_http_call(
     payload: dict[str, object] | None,
     timeout: float | None = None,
 ) -> dict[str, object] | None:
-    """Call a service route, resolving the auth token robustly.
+    """Call a service route, recovering the auth token on a 401.
 
-    The token is taken from the local status file when present; otherwise it is
-    fetched from the target port's ungated ``/health``. If a status-file token
-    is stale (the service restarted and rotated its token), the first request
-    returns 401 and the token is refreshed once from ``/health`` and retried, so
-    ``--port`` authenticates against any reachable service regardless of where
-    it was started.
+    The token from the local status file is sent first (it may be empty or
+    stale). Only if the route rejects it with 401 does the client fetch the
+    live token from the target port's ungated ``/health`` and retry once. This
+    keeps the happy path a single request while letting ``--port`` authenticate
+    against a service started out-of-band (missing status file) or restarted
+    (rotated token), without an extra round-trip when the first call succeeds.
     """
     token = _status_file_token()
-    used_health_token = not token
-    if not token:
-        token = _fetch_health_token(port, timeout)
-
     status_code, result = _send_call(
         _build_call_request(port, path, payload, token), timeout
     )
 
-    if status_code == 401 and not used_health_token:
+    if status_code == 401:
         fresh = _fetch_health_token(port, timeout)
         if fresh and fresh != token:
             logger.debug(
-                "status-file token rejected on port %s; retrying with /health token",
-                port,
+                "token rejected on port %s; retrying with the /health token", port
             )
             _, result = _send_call(
                 _build_call_request(port, path, payload, fresh), timeout
