@@ -132,6 +132,30 @@ non-safety issues must be fixed before merge.
   localized and should not need new GPU runs beyond the existing real-backend
   tests.
 
+## Resolution
+
+Revision landed in commit `5ce0a35`:
+
+- **H1 RESOLVED** - `delete_prefix` hard-gates on `^r[0-9a-f]{12}_$` before any
+  lookup, enforced even under `--allow-unknown`; parametrized test proves
+  empty/short/non-canonical prefixes are refused with no collection touched.
+- **H2 RESOLVED** - `classify_root` returns `unverifiable` (reported, never
+  pruned) when the root's drive/share anchor is unreachable; survey surfaces the
+  state; unit test covers the unverifiable branch.
+- **H3 RESOLVED** - the store manifest hook records at most once per store
+  instance (`_manifest_recorded`), off the per-operation hot path.
+- **H4 RESOLVED** - the manifest resolves via `get_config().status_dir`, honouring
+  `--status-dir`; test fixtures `reset_config()` accordingly.
+- **M4 RESOLVED** - hook catch broadened to `Exception` (logged).
+- **M5 RESOLVED** - watcher eviction tests assert a kept sibling still surfaces.
+- **M6 RESOLVED** - migrate test exercises multi-page paging + count-verify.
+
+Tracked follow-ups (not blocking merge): **M1** migrate partial-target cleanup,
+**M2** busy-root slot-release before drop, **M3** stamp `last_indexed`, and the
+LOW items (L1 wire the safety guard to a real delete path when local-mode
+tree-delete lands; L2/L3/L4 cosmetic). All gates green: ruff / ty / basedpyright,
+38 no-GPU storage tests + the GPU watcher/eviction tests.
+
 ## Codification candidates
 
 None yet. H1 and H2 point at durable safety constraints (a destructive verb must
