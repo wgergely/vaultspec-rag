@@ -3,7 +3,7 @@ generated: true
 tags:
   - '#index'
   - '#storage-lifecycle'
-date: '2026-06-18'
+date: '2026-06-19'
 related:
   - '[[2026-06-18-storage-lifecycle-W02-P02-S06]]'
   - '[[2026-06-18-storage-lifecycle-W02-P02-S07]]'
@@ -32,6 +32,7 @@ related:
   - '[[2026-06-18-storage-lifecycle-plan]]'
   - '[[2026-06-18-storage-lifecycle-reference]]'
   - '[[2026-06-18-storage-lifecycle-research]]'
+  - '[[2026-06-19-storage-lifecycle-audit]]'
 ---
 
 # `storage-lifecycle` feature index
@@ -43,6 +44,10 @@ Auto-generated index of all documents tagged with `#storage-lifecycle`.
 ### adr
 
 - `2026-06-18-storage-lifecycle-adr` - `storage-lifecycle` adr: `server-authoritative storage lifecycle surface` | (**status:** `accepted`)
+
+### audit
+
+- `2026-06-19-storage-lifecycle-audit` - `storage-lifecycle` audit: `PR #196 code review`
 
 ### exec
 
