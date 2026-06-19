@@ -50,7 +50,6 @@ __all__ = [
 # Filename of the manifest inside the managed service (``status_dir``)
 # directory. Mirrors the local-only marker convention in ``config.py``.
 _MANIFEST_FILENAME = "storage-manifest.json"
-_STATUS_DIR_DEFAULT = "~/.vaultspec-rag"
 
 # Serialises in-process read-modify-write so two indexers recording roots
 # concurrently cannot drop each other's entries. Cross-process writers
@@ -79,16 +78,19 @@ class ManifestEntry:
 
 
 def _status_dir_path() -> Path:
-    """Resolve the managed service directory, honouring the env override.
+    """Resolve the managed service directory the same way the rest of the system does.
 
-    Read straight from the resolution chain (env override -> default), the
-    same way ``config.py``'s persistence helpers do, so the manifest lands
-    in the same directory the daemon and CLI already use and so tests can
-    isolate it via ``VAULTSPEC_RAG_STATUS_DIR`` without the config
-    singleton.
+    Resolves through ``get_config().status_dir`` (CLI ``--status-dir`` override
+    -> ``VAULTSPEC_RAG_STATUS_DIR`` env -> default), so the manifest always lands
+    in the same directory as ``service.json``, the qdrant tree, and the logs.
+    Reading the env directly here would silently ignore a ``--status-dir``
+    override and split the manifest from the rest of the service's durable
+    state. The import is function-local to avoid an import cycle with the store
+    (which imports this module's ``root_collection_prefix``-keyed helpers).
     """
-    raw = os.environ.get("VAULTSPEC_RAG_STATUS_DIR") or _STATUS_DIR_DEFAULT
-    return Path(raw).expanduser()
+    from .config import get_config
+
+    return Path(str(get_config().status_dir)).expanduser()
 
 
 def manifest_path() -> Path:
@@ -253,20 +255,43 @@ def reverse_map(prefix: str) -> str | None:
 
 
 def classify_root(entry: ManifestEntry) -> str:
-    """Classify a known manifest entry as ``live`` or ``orphaned``.
+    """Classify a known manifest entry as ``live``, ``orphaned``, or ``unverifiable``.
 
     A namespace whose prefix is absent from the manifest is ``unknown``;
     that case is handled by the survey caller, not here, because there is
     no entry to pass.
 
+    Data-safety: a root is declared ``orphaned`` (a prune target) only when
+    it is definitively absent AND its drive/share anchor is itself reachable.
+    A transiently-unreachable root - a disconnected UNC share, an unmounted
+    removable drive, or a permission/timeout error - is ``unverifiable`` and
+    is reported but never auto-pruned, so a live-but-offline index is never
+    deleted out from under the operator.
+
     Args:
         entry: A manifest entry whose backing root is being checked.
 
     Returns:
-        ``"live"`` when the recorded root path still exists on disk,
-        otherwise ``"orphaned"``.
+        ``"live"`` if the root exists, ``"unverifiable"`` if its existence
+        cannot be confirmed (unreachable anchor or OSError), else
+        ``"orphaned"``.
     """
+    root = Path(entry.root)
     try:
-        return "live" if Path(entry.root).exists() else "orphaned"
+        if root.exists():
+            return "live"
     except OSError:
-        return "orphaned"
+        return "unverifiable"
+    # Root is absent. Only an absent root on a *reachable* anchor (e.g. an
+    # existing ``C:\`` or ``\\host\share\``) is a true orphan; an absent or
+    # unreadable anchor means the volume/share is offline, not that the index
+    # is dead.
+    anchor = root.anchor
+    if not anchor:
+        return "unverifiable"
+    try:
+        if not Path(anchor).exists():
+            return "unverifiable"
+    except OSError:
+        return "unverifiable"
+    return "orphaned"

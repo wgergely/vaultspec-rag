@@ -390,6 +390,16 @@ class TestServerModeWatcherEviction:
                     "watcher did not evict the deleted doc from server-mode "
                     "search within timeout (issue 192)"
                 )
+            # Survivor check: eviction removed the doomed doc, NOT the whole
+            # collection. A kept sibling must still surface (distinguishes real
+            # eviction from a search/store that simply stopped returning hits).
+            init_vec = embedding_model.encode_query("Init initial body").tolist()
+            init_results = store.hybrid_search(
+                query_vector=init_vec, _query_text="Init initial body", limit=10
+            )
+            assert any("Initial body" in r.get("content", "") for r in init_results), (
+                "kept sibling doc must still be searchable after eviction"
+            )
         finally:
             stop_event.set()
             await watcher_task
@@ -465,6 +475,12 @@ class TestServerModeWatcherEviction:
                     "watcher did not evict the deleted code file from "
                     "server-mode search within timeout (issue 192)"
                 )
+            # Survivor check: the kept module must still surface, proving the
+            # watcher evicted only the deleted file, not the whole collection.
+            assert any(
+                "keep_mod" in hit.path
+                for hit in searcher.search_codebase("retained keep", top_k=5)
+            ), "kept code file must still be searchable after eviction"
         finally:
             stop_event.set()
             await watcher_task

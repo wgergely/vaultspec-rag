@@ -127,12 +127,13 @@ def _print_survey(surveys: list[NamespaceSurvey]) -> None:
         return
     counts = {
         status: sum(1 for s in surveys if s.status == status)
-        for status in ("orphaned", "unknown", "live")
+        for status in ("orphaned", "unknown", "unverifiable", "live")
     }
     total = _human_size(sum(s.footprint_bytes for s in surveys))
     typer.echo(
         f"{len(surveys)} namespaces  (orphaned={counts['orphaned']} "
-        f"unknown={counts['unknown']} live={counts['live']})  {total} on disk"
+        f"unknown={counts['unknown']} unverifiable={counts['unverifiable']} "
+        f"live={counts['live']})  {total} on disk"
     )
     for s in surveys:
         root = s.root if s.root is not None else "(unattributable)"

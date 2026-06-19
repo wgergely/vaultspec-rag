@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from ..config import reset_config
 from ..storage_manifest import (
     classify_root,
     load_manifest,
@@ -40,6 +41,7 @@ def isolated_status_dir(tmp_path: Path) -> Iterator[None]:
     key = "VAULTSPEC_RAG_STATUS_DIR"
     prev = os.environ.get(key)
     os.environ[key] = str(tmp_path / "managed")
+    reset_config()  # manifest resolves the status dir via get_config()
     try:
         yield
     finally:
@@ -47,6 +49,7 @@ def isolated_status_dir(tmp_path: Path) -> Iterator[None]:
             os.environ.pop(key, None)
         else:
             os.environ[key] = prev
+        reset_config()
 
 
 def test_record_and_load_round_trips(tmp_path: Path) -> None:
@@ -105,10 +108,26 @@ def test_classify_live_then_orphaned(tmp_path: Path) -> None:
     root.mkdir()
     entry = record_root(root, backend="server")
     assert classify_root(entry) == "live"
-    # Simulate a removed worktree: the recorded root no longer exists.
+    # Simulate a removed worktree: the recorded root no longer exists, but its
+    # drive/anchor is still reachable -> a true orphan.
     root.rmdir()
     refreshed = load_manifest()[entry.prefix]
     assert classify_root(refreshed) == "orphaned"
+
+
+def test_classify_unverifiable_when_anchor_unknown() -> None:
+    # H2: a root whose anchor cannot be confirmed (an absent root on an
+    # unreachable drive/share; here exercised via an anchorless root) is
+    # unverifiable, never orphaned - so prune never deletes a live-but-offline
+    # index on a disconnected volume.
+    from ..storage_manifest import ManifestEntry
+
+    entry = ManifestEntry(
+        prefix="raaaaaaaaaaaa_",
+        root="this-is-a-relative-nonexistent-root/x",
+        backend="server",
+    )
+    assert classify_root(entry) == "unverifiable"
 
 
 def test_missing_manifest_is_empty() -> None:

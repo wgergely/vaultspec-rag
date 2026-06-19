@@ -109,7 +109,8 @@ def classify_namespaces(
             )
         )
 
-    # Bias the view toward actionable state: orphaned and unknown first.
-    status_rank = {"orphaned": 0, "unknown": 1, "live": 2}
-    surveys.sort(key=lambda s: (status_rank.get(s.status, 3), s.prefix))
+    # Bias the view toward actionable state: orphaned, then unknown and
+    # unverifiable (both need operator attention), then live.
+    status_rank = {"orphaned": 0, "unknown": 1, "unverifiable": 2, "live": 3}
+    surveys.sort(key=lambda s: (status_rank.get(s.status, 4), s.prefix))
     return surveys

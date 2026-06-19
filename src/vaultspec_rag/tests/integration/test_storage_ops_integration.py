@@ -85,6 +85,7 @@ def isolated_status_dir(tmp_path: Path) -> Iterator[Path]:
     key = "VAULTSPEC_RAG_STATUS_DIR"
     prev = os.environ.get(key)
     os.environ[key] = str(tmp_path / "managed")
+    reset_config()  # manifest resolves the status dir via get_config()
     try:
         yield tmp_path / "managed"
     finally:
@@ -92,6 +93,7 @@ def isolated_status_dir(tmp_path: Path) -> Iterator[Path]:
             os.environ.pop(key, None)
         else:
             os.environ[key] = prev
+        reset_config()
 
 
 def _make_collection(client: QdrantClient, name: str) -> None:
@@ -305,5 +307,66 @@ def test_migrate_remaps_name_and_copies_points(
         )
         assert missing[0].status == "skipped"
         assert missing[0].reason == "no_such_source"
+    finally:
+        client.close()
+
+
+@pytest.mark.usefixtures("isolated_status_dir")
+@pytest.mark.parametrize("bad_prefix", ["", "r", "rdeadbeef", "notaprefix"])
+def test_delete_rejects_noncanonical_prefix_even_with_allow_unknown(
+    ops_qdrant: QdrantSupervisor,
+    bad_prefix: str,
+) -> None:
+    """H1: a non-canonical / empty prefix is refused before any deletion, even
+    with allow_unknown, so a crafted prefix can never startswith-match and wipe
+    foreign roots."""
+    from qdrant_client import QdrantClient
+
+    client = QdrantClient(url=ops_qdrant.url)
+    try:
+        _make_collection(client, "raaaaaaaaaaaa_vault_docs")
+        _make_collection(client, "rbbbbbbbbbbbb_vault_docs")
+
+        res = delete_prefix(client, bad_prefix, dry_run=False, allow_unknown=True)
+        assert res.status == "skipped"
+        assert res.reason == "invalid_prefix"
+        # Nothing was touched.
+        assert client.collection_exists("raaaaaaaaaaaa_vault_docs")
+        assert client.collection_exists("rbbbbbbbbbbbb_vault_docs")
+    finally:
+        client.close()
+
+
+@pytest.mark.usefixtures("isolated_status_dir")
+def test_migrate_copies_multiple_pages(
+    ops_qdrant: QdrantSupervisor,
+) -> None:
+    """M6: migrate pages through more points than one batch and count-verifies."""
+    from qdrant_client import QdrantClient, models
+
+    client = QdrantClient(url=ops_qdrant.url)
+    try:
+        src = "raaaaaaaaaaaa_vault_docs"
+        client.create_collection(
+            collection_name=src,
+            vectors_config=models.VectorParams(size=4, distance=models.Distance.COSINE),
+        )
+        client.upsert(
+            collection_name=src,
+            points=[
+                models.PointStruct(
+                    id=i, vector=[0.1, 0.2, 0.3, float(i)], payload={"n": i}
+                )
+                for i in range(1, 6)
+            ],
+            wait=True,
+        )
+        name_map = {src: "rbbbbbbbbbbbb_vault_docs"}
+        results = migrate_collections(
+            client, client, name_map, dry_run=False, batch_size=2
+        )
+        assert results[0].status == "migrated"
+        assert results[0].points == 5
+        assert client.count(collection_name="rbbbbbbbbbbbb_vault_docs").count == 5
     finally:
         client.close()

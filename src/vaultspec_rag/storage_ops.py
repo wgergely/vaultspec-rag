@@ -22,6 +22,7 @@ Every destructive function:
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -31,6 +32,13 @@ from .storage_survey import NamespaceSurvey, classify_namespaces
 
 if TYPE_CHECKING:
     from qdrant_client import QdrantClient
+
+# A canonical per-root namespace prefix is exactly ``r`` + 12 hex + ``_``
+# (blake2b digest_size=6). Anchored at both ends so an empty or short prefix
+# (e.g. ``""`` or ``"r"``) can never match every collection via startswith -
+# the load-bearing guard against a total out-of-scope wipe, enforced even
+# under ``allow_unknown``.
+_CANONICAL_PREFIX_RE = re.compile(r"^r[0-9a-f]{12}_$")
 
 __all__ = [
     "DeleteResult",
@@ -195,6 +203,11 @@ def delete_prefix(
     Returns:
         A :class:`DeleteResult` describing the outcome.
     """
+    # Hard gate: only a canonical r{12hex}_ prefix may ever be a delete target.
+    # This is enforced before anything else and is NOT relaxed by allow_unknown,
+    # so an empty/short/crafted prefix can never startswith-match foreign roots.
+    if not _CANONICAL_PREFIX_RE.match(prefix):
+        return DeleteResult(prefix, "skipped", reason="invalid_prefix")
     manifest = load_manifest()
     targets = [
         c.name
