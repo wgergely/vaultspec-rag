@@ -51,7 +51,7 @@ def _free_port() -> int:
 
 
 @pytest.fixture(scope="module")
-def _qdrant_binary() -> Path:
+def _qdrant_binary() -> Path:  # pyright: ignore[reportUnusedFunction]
     reset_config()
     report = provision()
     assert report.action in (
