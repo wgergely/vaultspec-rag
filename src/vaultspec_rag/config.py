@@ -440,13 +440,22 @@ class VaultSpecConfigWrapper:
             env_val = os.environ.get(env_key.value)
             if env_val is not None:
                 default = self._RAG_DEFAULTS[name]
-                if isinstance(default, bool):
+                if isinstance(default, str) and not env_val.strip():
+                    # An empty/whitespace string override for a path-like knob is
+                    # a footgun - e.g. ``VAR="$UNSET"`` exports ``""`` - and
+                    # ``Path("").expanduser()`` is the cwd, which would repoint
+                    # the managed-dir blast radius (delete/clean) into the working
+                    # dir. Treat it as absent (fall through to the module
+                    # default), matching the persistence helpers' ``or DEFAULT``.
+                    pass
+                elif isinstance(default, bool):
                     return env_val.lower() in ("1", "true", "yes")
-                if isinstance(default, int):
+                elif isinstance(default, int):
                     return int(env_val)
-                if isinstance(default, float):
+                elif isinstance(default, float):
                     return float(env_val)
-                return env_val
+                else:
+                    return env_val
 
         # 2.5. Persisted runtime selection (local_only only). When
         # ``install --local-only`` wrote the marker, a later

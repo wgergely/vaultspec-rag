@@ -88,6 +88,30 @@ def consumer_workspace(tmp_path: Path) -> Path:
     return ws
 
 
+def test_operator_symlink_binary_is_refused(
+    isolated_status_dir: Path,  # noqa: ARG001  # managed-dir isolation
+    tmp_path: Path,
+) -> None:
+    # H5 (security): an operator-supplied binary path that is a symlink must be
+    # refused, never followed - copying it would dereference the link and could
+    # register attacker content (TOCTOU) under an operator-blessed manifest.
+    from ..qdrant_runtime import QdrantProvisionAction, provision
+
+    real = tmp_path / "real_qdrant"
+    real.write_bytes(b"#!/bin/sh\necho real\n")
+    link = tmp_path / "link_qdrant"
+    try:
+        os.symlink(real, link)
+    except OSError:
+        pytest.fail("Cannot create symlink - test requires symlink support")
+
+    report = provision(binary=link)
+    assert report.action == QdrantProvisionAction.FAILED
+    assert "symlink" in report.message.lower()
+    # Nothing was registered into the managed dir.
+    assert not (qdrant_bin_dir() / binary_filename()).exists()
+
+
 def _seed_verified_install() -> Path:
     """Pre-seed the managed dir exactly as a verified provision leaves it.
 
