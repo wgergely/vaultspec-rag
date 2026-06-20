@@ -9,6 +9,7 @@ and a failing preprocessor surfaces a skip count rather than a silent gap.
 
 from __future__ import annotations
 
+import os
 import shlex
 import sys
 import textwrap
@@ -16,10 +17,11 @@ from typing import TYPE_CHECKING, TypedDict
 
 import pytest
 
+from ...config import EnvVar, reset_config
 from ...progress import NullProgressReporter
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Generator, Iterator
     from pathlib import Path
 
     from ...embeddings import EmbeddingModel
@@ -28,6 +30,25 @@ if TYPE_CHECKING:
     from ..conftest import RagComponentsWithManifest
 
 pytestmark = [pytest.mark.integration]
+
+
+@pytest.fixture(autouse=True)
+def _enable_preprocess() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]
+    """Preprocessing is OFF by default (untrusted-repo RCE gate); these
+    end-to-end tests opt in to exercise the real extractor path."""
+    key = EnvVar.PREPROCESS_ENABLED.value
+    prev = os.environ.get(key)
+    os.environ[key] = "1"
+    reset_config()
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = prev
+        reset_config()
+
 
 # Emits a two-unit PreprocOutput with recognisable text + page anchors.
 _PDF_EXTRACTOR = """

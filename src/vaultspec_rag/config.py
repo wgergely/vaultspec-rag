@@ -62,6 +62,7 @@ class EnvVar(StrEnum):
     WATCH_DEBOUNCE_MS = "VAULTSPEC_RAG_WATCH_DEBOUNCE_MS"
     WATCH_COOLDOWN_S = "VAULTSPEC_RAG_WATCH_COOLDOWN_S"
     # Document-preprocessing hook knobs (#185).
+    PREPROCESS_ENABLED = "VAULTSPEC_RAG_PREPROCESS_ENABLED"
     PREPROCESS_MAX_EMITTED_BYTES = "VAULTSPEC_RAG_PREPROCESS_MAX_EMITTED_BYTES"
     HTML_STRIP = "VAULTSPEC_RAG_HTML_STRIP"
     # Vault document chunking knob.
@@ -124,6 +125,7 @@ _ENV_OVERRIDE_MAP: dict[str, EnvVar] = {
     "watch_debounce_ms": EnvVar.WATCH_DEBOUNCE_MS,
     "watch_cooldown_s": EnvVar.WATCH_COOLDOWN_S,
     # Document-preprocessing hook knobs (#185).
+    "preprocess_enabled": EnvVar.PREPROCESS_ENABLED,
     "preprocess_max_emitted_bytes": EnvVar.PREPROCESS_MAX_EMITTED_BYTES,
     "html_strip": EnvVar.HTML_STRIP,
     # Vault chunking + reranker input knobs.
@@ -387,6 +389,13 @@ class VaultSpecConfigWrapper:
         "watch_enabled": True,
         "watch_debounce_ms": 2000,
         "watch_cooldown_s": 30.0,
+        # Document-preprocessing executes project-defined commands, so it is
+        # OFF by default: a cloned/untrusted repo's ``.vaultragpreprocess.toml``
+        # must never run code merely because the project was indexed or watched.
+        # Operators opt in per host via ``VAULTSPEC_RAG_PREPROCESS_ENABLED=1``
+        # once they trust the project's preprocess commands (security: untrusted
+        # -repo arbitrary code execution).
+        "preprocess_enabled": False,
         # Document-preprocessing hook knobs (#185). The source-size cap
         # (``_MAX_FILE_SIZE``) is relaxed for files matched by a preprocess
         # rule; this cap instead bounds the *emitted* text a preprocessor
