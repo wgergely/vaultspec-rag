@@ -186,6 +186,14 @@ All findings fixed on this branch (commits `de4bde9`, `7eedbf6`, `5563f11`);
   storage-lifecycle branch (PR #196), not `main`; wire it when a local-mode
   tree-delete lands there.
 
+**Round-2 review** (3 reviewers, all PASS - the C1 gate was traced bypass-free
+including the cache path; M1 and the binary fixes confirmed correct; the 6 new
+tests confirmed real, no mocks/skips). Follow-ups landed in `6fef2ad`: pass
+`RUST_BACKTRACE`/`RUST_LOG` to the qdrant child (M6 diagnosability), an
+end-to-end integration test proving a disabled gate does not execute a command
+rule on index (the real C1 proof), and no-GPU tests for `has_provisioned_binary`,
+`clean_provisioned` symlink-skip, and the curated `_child_env`.
+
 ## Codification candidates
 
 Two strong candidates, to promote once the fixes land and have held a cycle
