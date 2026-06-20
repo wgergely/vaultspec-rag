@@ -160,6 +160,32 @@ ownership before terminating.
 - Each finding is independent and localized; fixes warrant their own issues/PRs
   and real-backend tests (no mocks), separate from the storage-lifecycle PR.
 
+## Resolution
+
+All findings fixed on this branch (commits `de4bde9`, `7eedbf6`, `5563f11`);
+`1025` unit tests pass, ruff / ty / basedpyright clean.
+
+- **C1 RESOLVED** - preprocessing is OFF by default; `load_preprocess_rules`
+  returns empty (loud warning) unless `VAULTSPEC_RAG_PREPROCESS_ENABLED=1`, so an
+  untrusted repo's commands never load or run on index/watch. Test: disabled gate
+  ignores a present config.
+- **H1 RESOLVED** - omitted `timeout_s` defaults to 120s (cap 1800s); never
+  wait-forever. **H2 RESOLVED** - `-`-leading path operand `./`-prefixed.
+- **H3/H4 RESOLVED** - env/PATH binaries log a loud UNVERIFIED warning and flag
+  when shadowing a verified install (`has_provisioned_binary`). **H5 RESOLVED** -
+  symlinked operator `--binary` refused (`follow_symlinks=False`); test added.
+- **M1 RESOLVED** - empty/whitespace path env treated as absent (no cwd
+  collapse); tests added. **M2** - `clean_provisioned` skips symlinks/junctions +
+  `onexc`. **M3** - extraction dest `O_NOFOLLOW` + symlink unlink. **M4** - binary
+  `0o700`, logs `0o600`+`O_NOFOLLOW`. **M5** - proxy-free loopback probes. **M6** -
+  curated qdrant child env (no daemon secrets).
+- **L2** - random cache temp name. **L4** - uninstall `--remove-data` previews
+  resolved path + size. **L5** - partial binary cleaned on failure. **L6** -
+  orphan-guard failure logged at error. **L3** - covered by M2's `onexc`.
+- **L1 (N/A here)** - the unused `storage_safety` guard lives on the
+  storage-lifecycle branch (PR #196), not `main`; wire it when a local-mode
+  tree-delete lands there.
+
 ## Codification candidates
 
 Two strong candidates, to promote once the fixes land and have held a cycle
