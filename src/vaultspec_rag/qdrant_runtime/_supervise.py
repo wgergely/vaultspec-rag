@@ -67,6 +67,11 @@ _CHILD_ENV_PASSTHROUGH = frozenset(
         "LC_ALL",
         "LC_CTYPE",
         "TZ",
+        # Diagnostics for the Rust child: operator-set crash backtraces and log
+        # tuning. Diagnostic-only, no secrets - kept so curating the env does not
+        # silently swallow an operator's RUST_BACKTRACE=1 / RUST_LOG=...
+        "RUST_BACKTRACE",
+        "RUST_LOG",
     }
 )
 
