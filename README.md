@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Status: Beta](https://img.shields.io/badge/status-beta-yellow.svg)](https://github.com/nevenincs/vaultspec-rag/releases)
 
-A [vaultspec-core](https://github.com/wgergely/vaultspec-core) project accumulates a durable record of decisions, plans, research, and the code they produced. vaultspec-rag searches that record and your source code by meaning, not by keyword.
+A [vaultspec-core](https://github.com/nevenincs/vaultspec-core) project accumulates a durable record of decisions, plans, research, and the code they produced. vaultspec-rag searches that record and your source code by meaning, not by keyword.
 
 Search `"file lock concurrent write per-root"` and vaultspec-rag surfaces the decision that governs it, even when the document never uses those exact words. It is the retrieval layer of the project: it finds and ranks the grounding, and a client such as an AI assistant reads it.
 

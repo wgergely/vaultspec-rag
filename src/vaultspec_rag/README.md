@@ -1,6 +1,6 @@
 # vaultspec-rag
 
-vaultspec-rag is the semantic-search companion to [vaultspec-core](https://github.com/wgergely/vaultspec-core). It indexes your vault's markdown documents and the source code beside them, then searches both by meaning rather than by exact words. A query for "how do we authenticate users" finds a note titled "login flow," which a keyword search would miss.
+vaultspec-rag is the semantic-search companion to [vaultspec-core](https://github.com/nevenincs/vaultspec-core). It indexes your vault's markdown documents and the source code beside them, then searches both by meaning rather than by exact words. A query for "how do we authenticate users" finds a note titled "login flow," which a keyword search would miss.
 
 vaultspec-core manages a `.vault/` directory of markdown documents - research notes, decisions, and plans. vaultspec-rag reads that vault and your code so you can search across both. Without a vaultspec-core workspace, vaultspec-rag has nothing to search.
 
