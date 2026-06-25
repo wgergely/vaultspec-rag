@@ -48,13 +48,13 @@ uv sync
    uv run vaultspec-rag server start
    ```
 
-2. Index your project:
+1. Index your project:
 
    ```bash
    uv run vaultspec-rag index
    ```
 
-3. Search:
+1. Search:
 
    ```bash
    uv run vaultspec-rag search "concept plus the domain terms"
