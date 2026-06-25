@@ -16,8 +16,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from vaultspec_rag.mcp._admin_tools import survey_storage
-from vaultspec_rag.serviceclient import _do_http_call, _try_http_admin
+from ...mcp._admin_tools import survey_storage
+from ...serviceclient import _do_http_call, _try_http_admin
 
 if TYPE_CHECKING:
     from pathlib import Path
