@@ -86,4 +86,4 @@ You installed vaultspec-rag, started a search service, indexed a project, and ra
 uv run vaultspec-rag server stop
 ```
 
-The [search and index guide](search-and-index.md) covers vault search, relevance scores, and the full filter set. The [documentation map](../README.md#documentation) lists every guide. If a step failed, report it on the [issue tracker](https://github.com/wgergely/vaultspec-rag/issues).
+The [search and index guide](search-and-index.md) covers vault search, relevance scores, and the full filter set. The [documentation map](../README.md#documentation) lists every guide. If a step failed, report it on the [issue tracker](https://github.com/nevenincs/vaultspec-rag/issues).

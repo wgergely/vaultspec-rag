@@ -2,11 +2,11 @@
 
 # vaultspec-rag: semantic search for a vaultspec-core workspace
 
-[![CI](https://github.com/wgergely/vaultspec-rag/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/wgergely/vaultspec-rag/actions/workflows/ci.yml)
+[![CI](https://github.com/nevenincs/vaultspec-rag/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nevenincs/vaultspec-rag/actions/workflows/ci.yml)
 [![PyPI version](https://img.shields.io/pypi/v/vaultspec-rag.svg)](https://pypi.org/project/vaultspec-rag/)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
-[![Status: Beta](https://img.shields.io/badge/status-beta-yellow.svg)](https://github.com/wgergely/vaultspec-rag/releases)
+[![Status: Beta](https://img.shields.io/badge/status-beta-yellow.svg)](https://github.com/nevenincs/vaultspec-rag/releases)
 
 A [vaultspec-core](https://github.com/wgergely/vaultspec-core) project accumulates a durable record of decisions, plans, research, and the code they produced. vaultspec-rag searches that record and your source code by meaning, not by keyword.
 
@@ -133,7 +133,7 @@ For the full filter set (path globs, document type, feature, date), see [search 
 
 ## Support and help
 
-File bugs and ask questions on the [GitHub issue tracker](https://github.com/wgergely/vaultspec-rag/issues).
+File bugs and ask questions on the [GitHub issue tracker](https://github.com/nevenincs/vaultspec-rag/issues).
 
 A good bug report carries five things: your vaultspec-rag version, your operating system, your GPU model, the exact command you ran, and the full stderr output. With those, a maintainer can reproduce the fault. Without them, the report is hard to act on.
 

@@ -35,8 +35,8 @@ For repeat use, start the server-backed service first - it keeps the models warm
 
 ## Documentation
 
-The [GitHub docs tree](https://github.com/wgergely/vaultspec-rag/tree/main/docs) holds the getting-started walkthrough, daily-use guides, CLI and configuration reference, and an architecture explanation.
+The [GitHub docs tree](https://github.com/nevenincs/vaultspec-rag/tree/main/docs) holds the getting-started walkthrough, daily-use guides, CLI and configuration reference, and an architecture explanation.
 
 ## Support
 
-Report issues on the [GitHub issue tracker](https://github.com/wgergely/vaultspec-rag/issues). A good bug report includes the vaultspec-rag version, your operating system, your GPU model, the exact command you ran, and the full stderr output.
+Report issues on the [GitHub issue tracker](https://github.com/nevenincs/vaultspec-rag/issues). A good bug report includes the vaultspec-rag version, your operating system, your GPU model, the exact command you ran, and the full stderr output.

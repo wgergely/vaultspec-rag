@@ -28,4 +28,4 @@ Local-only mode runs the database in-process behind a single flag. No server is 
 - [Installation guide](installation.md) covers prerequisites, the hardware floor, and setup.
 - [Storage backends](backends.md) covers choosing and operating the server or local-only mode.
 - [Indexing internals](indexing.md) covers the models and data structures behind the concepts on this page.
-- For help, file an issue on the [issue tracker](https://github.com/wgergely/vaultspec-rag/issues).
+- For help, file an issue on the [issue tracker](https://github.com/nevenincs/vaultspec-rag/issues).
