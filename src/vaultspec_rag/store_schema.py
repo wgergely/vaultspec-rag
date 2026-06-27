@@ -218,7 +218,11 @@ def describe_storage_schema() -> dict[str, Any]:
         payload_fields, indexes, id_scheme}, code:{...}, models:{dense, sparse}}``.
     """
     dense_dim = _effective_dense_dim()
-    dense_vector = {"name": DENSE_VECTOR_NAME, "dim": dense_dim, "distance": DENSE_DISTANCE}
+    dense_vector = {
+        "name": DENSE_VECTOR_NAME,
+        "dim": dense_dim,
+        "distance": DENSE_DISTANCE,
+    }
     sparse_vector = {"name": SPARSE_VECTOR_NAME}
     return {
         "version": STORAGE_SCHEMA_VERSION,

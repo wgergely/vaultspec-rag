@@ -117,7 +117,10 @@ class TestAssertCompatible:
 
     def test_non_integer_version_refuses(self) -> None:
         verdict = ss.assert_compatible(
-            {"version": "1", "vault": {"vectors": {"dense": {"name": "dense", "dim": 1024}}}},
+            {
+                "version": "1",
+                "vault": {"vectors": {"dense": {"name": "dense", "dim": 1024}}},
+            },
             known_version=1,
             expected_dense_dim=1024,
         )
@@ -134,6 +137,41 @@ class TestAssertCompatible:
         assert verdict["compatible"] is True
 
 
+class TestSchemaConsistency:
+    """Internal invariants of the declared schema (CI-gated drift guards).
+
+    A local-mode Qdrant ignores payload indexes, so the live-collection drift
+    test can only read the vector config; these pure invariants are the
+    CI-gated guard that an indexed field always names a real payload field and
+    that the index tuples carry no accidental duplicate.
+    """
+
+    def test_vault_indexes_are_real_payload_fields(self) -> None:
+        fields = set(ss.VaultDocPayload.__annotations__) | set(
+            ss.VaultChunkPayload.__annotations__
+        )
+        indexed = set(ss.VAULT_KEYWORD_INDEXES) | set(ss.VAULT_INTEGER_INDEXES)
+        assert indexed <= fields, indexed - fields
+
+    def test_code_indexes_are_real_payload_fields(self) -> None:
+        fields = set(ss.CodeChunkPayload.__annotations__)
+        indexed = set(ss.CODE_KEYWORD_INDEXES) | set(ss.CODE_INTEGER_INDEXES)
+        assert indexed <= fields, indexed - fields
+
+    def test_index_tuples_have_no_duplicates(self) -> None:
+        for tup in (
+            ss.VAULT_KEYWORD_INDEXES,
+            ss.VAULT_INTEGER_INDEXES,
+            ss.CODE_KEYWORD_INDEXES,
+            ss.CODE_INTEGER_INDEXES,
+        ):
+            assert len(tup) == len(set(tup)), tup
+
+    def test_keyword_and_integer_index_sets_are_disjoint(self) -> None:
+        assert not (set(ss.VAULT_KEYWORD_INDEXES) & set(ss.VAULT_INTEGER_INDEXES))
+        assert not (set(ss.CODE_KEYWORD_INDEXES) & set(ss.CODE_INTEGER_INDEXES))
+
+
 def test_store_schema_imports_no_torch() -> None:
     """``import vaultspec_rag.store_schema`` must load no Torch.
 
@@ -146,7 +184,9 @@ def test_store_schema_imports_no_torch() -> None:
     code = (
         "import sys\n"
         "import vaultspec_rag.store_schema\n"
-        "heavy = sorted(m for m in sys.modules if m == 'torch' or m.startswith('torch.'))\n"
+        "heavy = sorted(\n"
+        "    m for m in sys.modules if m == 'torch' or m.startswith('torch.')\n"
+        ")\n"
         "assert not heavy, heavy\n"
     )
     proc = subprocess.run(

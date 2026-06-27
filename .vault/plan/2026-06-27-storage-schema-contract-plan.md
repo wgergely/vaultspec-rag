@@ -125,17 +125,17 @@ Refactor the upsert and ensure paths to build payloads and indexes from the sche
 
 Surface the descriptor on /readiness and the bare schema_version on /health and /service-state, plus the assert_compatible helper (ADR D3, D4).
 
-- [ ] `P03.S11` - Add the bounded schema descriptor node to the readiness report to_dict; `src/vaultspec_rag/_readiness.py`.
-- [ ] `P03.S12` - Echo the bare schema_version on the raw /health payload; `src/vaultspec_rag/server/_lifespan.py`.
-- [ ] `P03.S13` - Echo the bare schema_version on the get_service_state snapshot; `src/vaultspec_rag/api.py`.
-- [ ] `P03.S14` - Add server-route tests asserting the schema descriptor on /readiness and the version echo on /health and /service-state; `src/vaultspec_rag/tests/test_server_routes.py`.
+- [x] `P03.S11` - Add the bounded schema descriptor node to the readiness report to_dict; `src/vaultspec_rag/_readiness.py`.
+- [x] `P03.S12` - Echo the bare schema_version on the raw /health payload; `src/vaultspec_rag/server/_lifespan.py`.
+- [x] `P03.S13` - Echo the bare schema_version on the get_service_state snapshot; `src/vaultspec_rag/api.py`.
+- [x] `P03.S14` - Add server-route tests asserting the schema descriptor on /readiness and the version echo on /health and /service-state; `src/vaultspec_rag/tests/test_server_routes.py`.
 
 ### Phase `P04` - document and guard the contract
 
 Author the reference doc and add the drift and propagation tests that fail when an inline shape diverges from the typed definition (ADR D4, D5).
 
-- [ ] `P04.S15` - Author the storage-schema reference document with the field tables, version-bump policy, and consumer compatibility recipe; `.vault/reference/2026-06-27-storage-schema-contract-reference.md`.
-- [ ] `P04.S16` - Add a real-store drift test asserting the live collection vector config and indexed payload fields equal the declared schema; `src/vaultspec_rag/tests/integration/test_store_schema_drift.py`.
+- [x] `P04.S15` - Author the storage-schema reference document with the field tables, version-bump policy, and consumer compatibility recipe; `.vault/reference/2026-06-27-storage-schema-contract-reference.md`.
+- [x] `P04.S16` - Add a real-store drift test asserting the live collection vector config and indexed payload fields equal the declared schema; `src/vaultspec_rag/tests/integration/test_store_schema_drift.py`.
 
 ## Description
 
