@@ -26,7 +26,7 @@ pytestmark = [pytest.mark.unit]
 
 
 class TestReadinessDescriptor:
-    """/readiness carries the bounded storage-schema descriptor (ADR D3)."""
+    """/readiness carries the bounded storage-schema descriptor."""
 
     def test_readiness_to_dict_carries_schema_descriptor(self) -> None:
         report = compute_readiness().to_dict()
@@ -60,7 +60,7 @@ class TestHealthSchemaVersion:
 
 
 class TestServiceStateSchemaVersion:
-    """get_service_state echoes the bare schema_version (ADR D3)."""
+    """get_service_state echoes the bare schema_version."""
 
     def test_service_state_echoes_schema_version(self, tmp_path: Path) -> None:
         # Isolate the managed-singleton paths to a temp dir so the snapshot

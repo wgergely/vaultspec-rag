@@ -152,7 +152,7 @@ class TestComputeReadinessShape:
         data = compute_readiness().to_dict()
         restored = json.loads(json.dumps(data))
         # The report carries the bounded storage-schema descriptor alongside the
-        # readiness dimensions (storage-schema-contract ADR D3).
+        # readiness dimensions.
         assert set(restored.keys()) == {
             "ready",
             "server_mode",

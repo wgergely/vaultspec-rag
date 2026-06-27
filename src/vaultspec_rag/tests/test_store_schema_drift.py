@@ -79,3 +79,10 @@ def test_descriptor_dim_matches_live_collection(tmp_store: VaultStore) -> None:
     descriptor = store_schema.describe_storage_schema()
     vault = cast("dict[str, Any]", descriptor["vault"])
     assert vault["vectors"]["dense"]["dim"] == live_dim
+
+
+def test_collection_and_descriptor_share_one_dim_source(tmp_store: VaultStore) -> None:
+    # The store builds its collection from the same dimension source the
+    # descriptor advertises, so the two agree by construction under ANY config,
+    # not only the default - the store's build dim IS the descriptor's source.
+    assert tmp_store._embedding_dim == store_schema.effective_dense_dim()

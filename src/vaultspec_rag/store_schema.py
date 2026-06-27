@@ -40,6 +40,7 @@ __all__ = [
     "VaultDocPayload",
     "assert_compatible",
     "describe_storage_schema",
+    "effective_dense_dim",
 ]
 
 # Version of the on-disk Qdrant shape. Bump ONLY on a breaking change: a vector
@@ -192,8 +193,14 @@ def _effective_models() -> dict[str, Any]:
     }
 
 
-def _effective_dense_dim() -> int:
-    """Read the effective dense dimension from config, defaulting to the constant."""
+def effective_dense_dim() -> int:
+    """Resolve the effective dense dimension from config (default the constant).
+
+    The single source of the dense dimension: both the wire descriptor and the
+    store's collection creation read it here, so the advertised dimension always
+    equals the one the live collection is built with - never the constant under
+    a config override.
+    """
     from .config import get_config
 
     cfg = get_config()
@@ -217,18 +224,25 @@ def describe_storage_schema() -> dict[str, Any]:
         A JSON-serialisable dict: ``{version, vault:{collection, vectors,
         payload_fields, indexes, id_scheme}, code:{...}, models:{dense, sparse}}``.
     """
-    dense_dim = _effective_dense_dim()
-    dense_vector = {
-        "name": DENSE_VECTOR_NAME,
-        "dim": dense_dim,
-        "distance": DENSE_DISTANCE,
-    }
-    sparse_vector = {"name": SPARSE_VECTOR_NAME}
+    dense_dim = effective_dense_dim()
+
+    def _vectors() -> dict[str, Any]:
+        # A fresh dict per collection block so a caller mutating one collection's
+        # vector view never aliases the other's.
+        return {
+            "dense": {
+                "name": DENSE_VECTOR_NAME,
+                "dim": dense_dim,
+                "distance": DENSE_DISTANCE,
+            },
+            "sparse": {"name": SPARSE_VECTOR_NAME},
+        }
+
     return {
         "version": STORAGE_SCHEMA_VERSION,
         "vault": {
             "collection": VAULT_COLLECTION,
-            "vectors": {"dense": dense_vector, "sparse": sparse_vector},
+            "vectors": _vectors(),
             "payload_fields": {
                 "document": list(_VAULT_DOC_FIELDS),
                 "chunk": list(_VAULT_CHUNK_FIELDS),
@@ -244,7 +258,7 @@ def describe_storage_schema() -> dict[str, Any]:
         },
         "code": {
             "collection": CODE_COLLECTION,
-            "vectors": {"dense": dense_vector, "sparse": sparse_vector},
+            "vectors": _vectors(),
             "payload_fields": {"chunk": list(_CODE_CHUNK_FIELDS)},
             "indexes": {
                 "keyword": list(CODE_KEYWORD_INDEXES),

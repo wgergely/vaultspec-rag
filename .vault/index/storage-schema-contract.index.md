@@ -24,6 +24,7 @@ related:
   - '[[2026-06-27-storage-schema-contract-P03-S14]]'
   - '[[2026-06-27-storage-schema-contract-P04-S15]]'
   - '[[2026-06-27-storage-schema-contract-P04-S16]]'
+  - '[[2026-06-27-storage-schema-contract-audit]]'
   - '[[2026-06-27-storage-schema-contract-plan]]'
   - '[[2026-06-27-storage-schema-contract-reference]]'
 ---
@@ -37,6 +38,10 @@ Auto-generated index of all documents tagged with `#storage-schema-contract`.
 ### adr
 
 - `2026-06-26-storage-schema-contract-adr` - `storage-schema-contract` adr: `versioned typed runtime-advertised qdrant schema contract` | (**status:** `accepted`)
+
+### audit
+
+- `2026-06-27-storage-schema-contract-audit` - `storage-schema-contract` audit: `code review verification`
 
 ### exec
 

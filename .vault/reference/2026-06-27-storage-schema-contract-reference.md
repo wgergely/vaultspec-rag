@@ -65,6 +65,10 @@ Each collection carries one dense named vector and one sparse named vector:
 
 The dense default dimension is the Qwen3-Embedding-0.6B default (1024). The EFFECTIVE
 dimension is the value in the runtime descriptor; validate against that, not the default.
+The collection always carries the `sparse` slot, so the descriptor's `vectors.sparse` is
+always present; when sparse encoding is disabled in config the descriptor's
+`models.sparse` is `null` while the slot remains - read `models.sparse` to know whether
+sparse vectors are actually populated.
 
 ### Payload fields
 

@@ -12,7 +12,7 @@ import threading
 import warnings
 from contextlib import contextmanager, nullcontext, suppress
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from . import store_schema
 
@@ -540,7 +540,10 @@ class VaultStore:
                     raise VaultStoreLockedError(str(self.db_path)) from exc
                 raise
 
-        self._embedding_dim = embedding_dim or EMBEDDING_DIM
+        # Default the collection's dense dimension from the same source the wire
+        # descriptor advertises, so the advertised dimension always equals what
+        # the live collection is built with - even under a config override.
+        self._embedding_dim = embedding_dim or store_schema.effective_dense_dim()
         self._vault_ensured = False
         self._code_ensured = False
         # Best-effort storage-manifest attribution is recorded at most once per
@@ -839,7 +842,7 @@ class VaultStore:
                 models.PointStruct(
                     id=self._stable_id(doc.id),
                     vector=vector,
-                    payload=dict(_vault_doc_payload(doc)),
+                    payload=cast("dict[str, Any]", _vault_doc_payload(doc)),
                 ),
             )
 
@@ -880,7 +883,7 @@ class VaultStore:
                 models.PointStruct(
                     id=self._stable_id(chunk.point_key),
                     vector=vector,
-                    payload=dict(_vault_chunk_payload(chunk)),
+                    payload=cast("dict[str, Any]", _vault_chunk_payload(chunk)),
                 ),
             )
 
@@ -917,7 +920,7 @@ class VaultStore:
                 models.PointStruct(
                     id=self._stable_id(chunk.id),
                     vector=vector,
-                    payload=dict(_code_chunk_payload(chunk)),
+                    payload=cast("dict[str, Any]", _code_chunk_payload(chunk)),
                 ),
             )
 
