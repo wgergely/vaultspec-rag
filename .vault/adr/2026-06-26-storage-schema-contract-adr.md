@@ -61,8 +61,7 @@ the `storage-schema-contract` research.
 - The project already accepts this discipline elsewhere: the storage manifest is a
   versioned JSON artifact (`"version": 1`) with a frozen dataclass; survey/op results are
   frozen dataclasses with stable `--json` envelopes; `/readiness` is a typed, bounded,
-  process-wide, read-only report (`ReadinessReport.to_dict()` → `{ready, server_mode,
-  dependencies:[…]}`) governed by `operator-views-are-bounded` and
+  process-wide, read-only report (`ReadinessReport.to_dict()` → `{ready, server_mode, dependencies:[…]}`) governed by `operator-views-are-bounded` and
   `service-domain-owns-operability`. The contract mirrors these precedents rather than
   inventing a new pattern.
 - The priority consumer is **out-of-process and cannot call rag Python**, so the contract's
@@ -123,9 +122,7 @@ There is then exactly one place the shape is defined; the search path reads the 
 
 **D3 — The wire descriptor is advertised on `/readiness`; a bare `schema_version` echoes on
 `/health` and `/service-state` for a cheap pre-read gate.** `describe_storage_schema()` is
-surfaced as a single bounded `schema` node in the readiness report: `{version,
-vault:{collection, vectors:{dense:{dim,distance}, sparse:true}, payload_fields[], indexes{},
-id_scheme}, code:{…}, models:{dense, sparse}}`. Bounded per `operator-views-are-bounded` — a
+surfaced as a single bounded `schema` node in the readiness report: `{version, vault:{collection, vectors:{dense:{dim,distance}, sparse:true}, payload_fields[], indexes{}, id_scheme}, code:{…}, models:{dense, sparse}}`. Bounded per `operator-views-are-bounded` — a
 fixed descriptor, never an open-ended dump. The full descriptor lives on `/readiness`
 (process-wide, read-only, torch-free — the honest home for a process-wide shape). The bare
 integer `schema_version` is additionally echoed on the ungated `/health` (the cheapest

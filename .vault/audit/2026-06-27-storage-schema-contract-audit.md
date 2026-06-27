@@ -95,8 +95,7 @@ the reference's suffix-match note; no code change.
 Per the `vaultspec-codify` discipline, this candidate is NOT yet promoted: a
 rule qualifies only after it has held across at least one full execution cycle,
 and this is its first. Promote with
-`vaultspec-core vault rule promote --from 2026-06-27-storage-schema-contract-audit
---as qdrant-payload-shape-is-defined-once` once the contract has survived one
+`vaultspec-core vault rule promote --from 2026-06-27-storage-schema-contract-audit --as qdrant-payload-shape-is-defined-once` once the contract has survived one
 follow-on change (the natural occasion is the dashboard's adoption of the
 descriptor, or the first additive payload field).
 

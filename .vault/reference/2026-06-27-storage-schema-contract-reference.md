@@ -58,10 +58,10 @@ local mode the names are bare.
 
 Each collection carries one dense named vector and one sparse named vector:
 
-| Vector  | Name     | Type        | Params                              |
-| ------- | -------- | ----------- | ----------------------------------- |
-| dense   | `dense`  | float dense | size = effective dim (default 1024), distance `Cosine` |
-| sparse  | `sparse` | SPLADE      | qdrant sparse vector                |
+| Vector | Name     | Type        | Params                                                 |
+| ------ | -------- | ----------- | ------------------------------------------------------ |
+| dense  | `dense`  | float dense | size = effective dim (default 1024), distance `Cosine` |
+| sparse | `sparse` | SPLADE      | qdrant sparse vector                                   |
 
 The dense default dimension is the Qwen3-Embedding-0.6B default (1024). The EFFECTIVE
 dimension is the value in the runtime descriptor; validate against that, not the default.
@@ -115,8 +115,7 @@ already read are unchanged, not that no field was added.
 
 The contract is read at runtime from the resident service:
 
-- `GET /readiness` - the full descriptor under the `schema` key: `{version, vault:{collection,
-  vectors, payload_fields, indexes, id_scheme}, code:{...}, models:{dense, sparse}}`. Read-only,
+- `GET /readiness` - the full descriptor under the `schema` key: `{version, vault:{collection, vectors, payload_fields, indexes, id_scheme}, code:{...}, models:{dense, sparse}}`. Read-only,
   process-wide, torch-free. This is the authoritative source for the effective dimension.
 - `GET /health` (ungated) and `GET /service-state` - a bare `schema_version` integer, the
   cheapest pre-read gate; check it before deciding to fetch the full descriptor.
